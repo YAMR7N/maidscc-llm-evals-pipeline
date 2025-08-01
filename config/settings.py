@@ -9,7 +9,7 @@ MODELS = {
     "gemini-1.5-pro": {"provider": "gemini", "temperature": 0.0},
     "gemini-1.5-flash": {"provider": "gemini", "temperature": 0.0},
     "gemini-2.0-flash-exp": {"provider": "gemini", "temperature": 0.0},
-    "gemini-2.5-pro": {"provider": "gemini", "temperature": 0.0},
+    "gemini-2.5-pro": {"provider": "gemini", "temperature": 0.2},
     "gemini-2.5-flash": {
         "provider": "gemini", 
         "temperature": 0.2,

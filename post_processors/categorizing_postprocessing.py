@@ -84,10 +84,27 @@ class CategorizingProcessor:
             parsed = self.safe_json_parse(llm_output)
             
             if parsed:
+                # Extract categories list and intervention/transfer info
+                categories_data = parsed.get('Categories', [])
+                intervention_or_transfer = parsed.get('InterventionOrTransfer', 'N/A')
+                category_causing = parsed.get('CategoryCausingInterventionOrTransfer', 'N/A')
+                
+                # Handle different possible formats for Categories
+                categories_list = []
+                if isinstance(categories_data, list):
+                    for cat in categories_data:
+                        if isinstance(cat, dict) and 'CategoryName' in cat:
+                            categories_list.append(cat['CategoryName'])
+                elif isinstance(categories_data, dict):
+                    # If it's a single category as dict
+                    if 'CategoryName' in categories_data:
+                        categories_list.append(categories_data['CategoryName'])
+                
                 parsed_results.append({
                     'chat_id': row.get('conversation_id', f'chat_{idx}'),
-                    'intervention_or_transfer': parsed.get('InterventionOrTransfer', 'Unknown'),
-                    'category': parsed.get('Category', 'Unknown'),
+                    'categories': categories_list,
+                    'intervention_or_transfer': intervention_or_transfer,
+                    'category_causing_intervention_transfer': category_causing,
                     'original_output': llm_output
                 })
             else:
@@ -95,8 +112,9 @@ class CategorizingProcessor:
                 # Still add to results for counting
                 parsed_results.append({
                     'chat_id': row.get('conversation_id', f'chat_{idx}'),
+                    'categories': [],
                     'intervention_or_transfer': 'Parse_Error',
-                    'category': 'Parse_Error',
+                    'category_causing_intervention_transfer': 'Parse_Error',
                     'original_output': llm_output
                 })
         
@@ -107,15 +125,8 @@ class CategorizingProcessor:
         # Create results DataFrame
         results_df = pd.DataFrame(parsed_results)
         
-        # Count categories
-        category_counts = Counter(results_df['category'])
+        # Print intervention/transfer breakdown
         intervention_counts = Counter(results_df['intervention_or_transfer'])
-        
-        print(f"\n📋 Category Breakdown:")
-        for category, count in category_counts.most_common():
-            percentage = (count / len(results_df)) * 100
-            print(f"  {category}: {count} ({percentage:.1f}%)")
-        
         print(f"\n🔄 Intervention/Transfer Breakdown:")
         for int_type, count in intervention_counts.most_common():
             percentage = (count / len(results_df)) * 100
@@ -126,41 +137,63 @@ class CategorizingProcessor:
     def create_summary_report(self, results_df, department, output_filename):
         """Create clean summary report from parsed results"""
         
-        # Create new format: Category analysis with intervention/transfer percentages per category
+        # Get all unique categories from all chats
+        all_categories = set()
+        for categories_list in results_df['categories']:
+            all_categories.update(categories_list)
+        
+        # Calculate overall percentage of chats not handled by bot
         total_chats = len(results_df)
+        chats_not_handled = len(results_df[results_df['intervention_or_transfer'].isin(['Intervention', 'Transfer'])])
+        pct_all_chats_not_handled = (chats_not_handled / total_chats * 100) if total_chats > 0 else 0
+        
         summary_data = []
         
-        # Group by category and calculate percentages
-        for category in results_df['category'].unique():
-            if category in ['Parse_Error', 'N/A']:
-                continue  # Skip parse errors and N/A from analysis
-                
-            category_data = results_df[results_df['category'] == category]
-            category_total = len(category_data)
+        # Process each category
+        for category in sorted(all_categories):
+            if category in ['Parse_Error', 'N/A', '']:
+                continue  # Skip invalid categories
             
-            # Count intervention/transfer within this category
-            intervention_in_category = len(category_data[category_data['intervention_or_transfer'] == 'Intervention'])
-            transfer_in_category = len(category_data[category_data['intervention_or_transfer'] == 'Transfer'])
+            # Find all chats that contain this category
+            chats_with_category = []
+            for idx, row in results_df.iterrows():
+                if category in row['categories']:
+                    chats_with_category.append(row)
             
-            # Calculate percentages as proportion of ALL chats (so they sum to % of ALL chats)
-            pct_intervention = (intervention_in_category / total_chats * 100) if total_chats > 0 else 0
-            pct_transfer = (transfer_in_category / total_chats * 100) if total_chats > 0 else 0
-            pct_of_all_chats = (category_total / total_chats * 100) if total_chats > 0 else 0
+            category_count = len(chats_with_category)
             
-            summary_data.append([
-                category,
-                f"{pct_intervention:.2f}%",
-                f"{pct_transfer:.2f}%", 
-                f"{pct_of_all_chats:.2f}%"
-            ])
+            if category_count == 0:
+                continue
+            
+            # Calculate metrics
+            category_pct = (category_count / total_chats * 100) if total_chats > 0 else 0
+            
+            # Count by intervention/transfer status for this category
+            chats_handled_by_bot = sum(1 for chat in chats_with_category if chat['intervention_or_transfer'] == 'N/A')
+            chats_intervention = sum(1 for chat in chats_with_category if chat['intervention_or_transfer'] == 'Intervention')
+            chats_transfer = sum(1 for chat in chats_with_category if chat['intervention_or_transfer'] == 'Transfer')
+            
+            # Calculate percentages relative to category count
+            coverage_per_category_pct = (chats_handled_by_bot / category_count * 100) if category_count > 0 else 0
+            intervention_by_agent_pct = (chats_intervention / category_count * 100) if category_count > 0 else 0
+            transferred_by_bot_pct = (chats_transfer / category_count * 100) if category_count > 0 else 0
+            
+            summary_data.append({
+                'Category': category,
+                'Count': category_count,
+                'Category %': f"{category_pct:.2f}%",
+                'Coverage Per Category %': f"{coverage_per_category_pct:.2f}%",
+                'Intervention By Agent %': f"{intervention_by_agent_pct:.2f}%",
+                'Transferred by Bot %': f"{transferred_by_bot_pct:.2f}%",
+                '%AllChatsNotHandled': f"{pct_all_chats_not_handled:.2f}%"
+            })
         
-        # Create summary DataFrame with new format
-        summary_df = pd.DataFrame(summary_data, columns=['Category', '% Intervention', '% Transfers', '% of ALL chats'])
+        # Create summary DataFrame
+        summary_df = pd.DataFrame(summary_data)
         
-        # Sort by % of ALL chats (descending) - need to convert percentage strings to float for sorting
+        # Sort by Count (descending)
         if len(summary_df) > 0:
-            summary_df['sort_key'] = summary_df['% of ALL chats'].str.rstrip('%').astype(float)
-            summary_df = summary_df.sort_values('sort_key', ascending=False).drop('sort_key', axis=1)
+            summary_df = summary_df.sort_values('Count', ascending=False)
         
         # Save summary
         summary_df.to_csv(output_filename, index=False)
@@ -168,20 +201,21 @@ class CategorizingProcessor:
         
         # Show quick summary
         print(f"\n📊 Quick Summary for {department}:")
-        print(f"Total conversations analyzed: {len(results_df)}")
+        print(f"Total conversations analyzed: {total_chats}")
+        print(f"Overall chats not handled by bot: {chats_not_handled} ({pct_all_chats_not_handled:.1f}%)")
         
-        # Show top 5 categories by % of all chats
+        # Show top 5 categories by count
         if len(summary_df) > 0:
             print(f"\nTop categories by volume:")
-            for i, (_, row) in enumerate(summary_df.head(5).iterrows()):
-                print(f"  {i+1}. {row['Category']}: {row['% of ALL chats']} of all chats")
-                print(f"      (Intervention: {row['% Intervention']}, Transfer: {row['% Transfers']})")
+            for i, row in summary_df.head(5).iterrows():
+                print(f"  {i+1}. {row['Category']}: {row['Count']} chats ({row['Category %']})")
+                print(f"      Coverage: {row['Coverage Per Category %']}, Intervention: {row['Intervention By Agent %']}, Transfer: {row['Transferred by Bot %']}")
         
         # Show overall intervention/transfer split
         int_counts = results_df['intervention_or_transfer'].value_counts()
         print(f"\nOverall Intervention/Transfer split:")
         for int_type, count in int_counts.items():
-            percentage = (count / len(results_df)) * 100
+            percentage = (count / total_chats * 100)
             print(f"  {int_type}: {count} ({percentage:.1f}%)")
         
         return summary_df

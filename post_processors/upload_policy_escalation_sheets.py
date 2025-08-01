@@ -19,8 +19,14 @@ class PolicyEscalationUploader:
         self.service = None
         self.setup_sheets_api()
         
-        # Main Policy Escalation sheet ID
-        self.policy_escalation_sheet_id = '1Fv6IzSYEAoLQhfPlFMPUb8mwNP9B723lUDv9dJHODSs'
+        # Policy Escalation sheet IDs by department
+        self.policy_escalation_sheet_ids = {
+            'mv_resolvers': '1Fv6IzSYEAoLQhfPlFMPUb8mwNP9B723lUDv9dJHODSs',
+            'doctors': '1JbZOR18qYmFah-ByM0227clI0_22wfmHwymYR6zwWAE'
+        }
+        
+        # Will be set based on files found
+        self.policy_escalation_sheet_id = None
 
     def setup_sheets_api(self):
         """Setup Google Sheets API authentication"""
@@ -242,23 +248,14 @@ class PolicyEscalationUploader:
                     df = pd.read_csv(filepath)
                     print(f"   📊 Found {len(df)} policy entries for {dept_name}")
                     
-                    # Add department header
-                    dept_header_df = pd.DataFrame([[f"=== {dept_name} Policy Frequency Analysis ==="]], columns=['Department'])
-                    empty_row_df = pd.DataFrame([[""]], columns=[''])
-                    
-                    # Combine header and data
-                    upload_df = pd.concat([dept_header_df, empty_row_df, df], ignore_index=True)
-                    
                     # Upload to the summary sheet
                     if first_upload:
                         # First department - clear and upload
-                        self.upload_dataframe_to_sheet(upload_df, self.policy_escalation_sheet_id, summary_sheet_name)
+                        self.upload_dataframe_to_sheet(df, self.policy_escalation_sheet_id, summary_sheet_name)
                         first_upload = False
                     else:
-                        # Subsequent departments - append with spacing
-                        spacing_df = pd.DataFrame([[""], [""]], columns=[''])
-                        upload_with_spacing = pd.concat([spacing_df, upload_df], ignore_index=True)
-                        self.upload_dataframe_to_sheet(upload_with_spacing, self.policy_escalation_sheet_id, summary_sheet_name, append=True)
+                        # Subsequent departments - append without headers
+                        self.upload_dataframe_to_sheet(df, self.policy_escalation_sheet_id, summary_sheet_name, append=True)
                     
                     success_count += 1
                     
@@ -295,13 +292,28 @@ class PolicyEscalationUploader:
         
         # Find Policy Escalation LLM output files
         policy_escalation_files = []
+        department_found = None
         for filename in os.listdir(llm_outputs_dir):
             if filename.startswith('policy_escalation_') and filename.endswith(f'_{date_str}.csv'):
                 filepath = os.path.join(llm_outputs_dir, filename)
                 policy_escalation_files.append(filepath)
+                
+                # Extract department from filename
+                if 'doctors' in filename.lower():
+                    department_found = 'doctors'
+                elif 'mv_resolvers' in filename.lower():
+                    department_found = 'mv_resolvers'
         
         if not policy_escalation_files:
             print(f"❌ No Policy Escalation files found in {llm_outputs_dir}")
+            return False
+        
+        # Set the appropriate sheet ID based on department found
+        if department_found and department_found in self.policy_escalation_sheet_ids:
+            self.policy_escalation_sheet_id = self.policy_escalation_sheet_ids[department_found]
+            print(f"✅ Using sheet ID for {department_found}: {self.policy_escalation_sheet_id}")
+        else:
+            print(f"❌ Could not determine department from files. Found files: {[os.path.basename(f) for f in policy_escalation_files]}")
             return False
         
         # Process each file and upload to separate sheets

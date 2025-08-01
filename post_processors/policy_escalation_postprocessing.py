@@ -32,8 +32,12 @@ class PolicyEscalationProcessor:
         self.service = None
         self.setup_sheets_api()
         
-        # Snapshot sheet for metric tracking
-        self.snapshot_sheet_id = '1XkVcHlkh8fEp7mmBD1Zkavdp2blBLwSABT1dE_sOf74'
+        # Snapshot sheets for metric tracking (different for different departments)
+        self.general_snapshot_sheet_id = '1XkVcHlkh8fEp7mmBD1Zkavdp2blBLwSABT1dE_sOf74'
+        self.doctors_snapshot_sheet_id = '1STHimb0IJ077iuBtTOwsa-GD8jStjU3SiBW7yBWom-E'
+        
+        # Will be set based on files found
+        self.snapshot_sheet_id = None
     
     def safe_json_parse(self, json_str):
         """Safely parse JSON string from LLM output"""
@@ -346,6 +350,17 @@ class PolicyEscalationProcessor:
         if not policy_escalation_files:
             print("❌ No Policy Escalation files found to process")
             return False
+        
+        # Determine which department we're processing based on filenames
+        is_doctors = any('doctors' in filename.lower() for filepath, dept_key, filename in policy_escalation_files)
+        
+        # Set the appropriate snapshot sheet ID
+        if is_doctors:
+            self.snapshot_sheet_id = self.doctors_snapshot_sheet_id
+            print(f"✅ Using Doctors snapshot sheet: {self.snapshot_sheet_id}")
+        else:
+            self.snapshot_sheet_id = self.general_snapshot_sheet_id
+            print(f"✅ Using General snapshot sheet: {self.snapshot_sheet_id}")
         
         success_count = 0
         overall_results = {}

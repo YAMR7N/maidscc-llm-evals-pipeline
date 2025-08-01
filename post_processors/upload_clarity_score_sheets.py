@@ -146,8 +146,11 @@ class ClarityScoreUploader:
         for filename in os.listdir(llm_outputs_dir):
             if filename.startswith('clarity_score_') and filename.endswith('.csv'):
                 filepath = os.path.join(llm_outputs_dir, filename)
-                # Extract department key from filename
-                dept_key = filename.replace('clarity_score_', '').replace('.csv', '').replace('_07_29', '').replace('_07_28', '').replace('_07_27', '')
+                # Extract department key from filename by removing prefix, suffix, and date pattern
+                import re
+                dept_key = filename.replace('clarity_score_', '').replace('.csv', '')
+                # Remove date pattern (_MM_DD) from the end
+                dept_key = re.sub(r'_\d{2}_\d{2}$', '', dept_key)
                 files_found.append((filepath, dept_key, filename))
                 print(f"📁 Found clarity score file: {filename}")
         

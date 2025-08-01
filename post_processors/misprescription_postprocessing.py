@@ -74,7 +74,7 @@ class MisprescriptionProcessor:
             
             if df.empty:
                 print(f"⚠️ Empty file: {filepath}")
-                return 0.0
+                return 0.0, 0, 0
             
             total_conversations = 0
             misprescription_count = 0
@@ -106,11 +106,11 @@ class MisprescriptionProcessor:
             print(f"   Parsing errors: {parsing_errors}")
             print(f"   Misprescription percentage: {percentage:.1f}%")
             
-            return round(percentage, 1)
+            return round(percentage, 1), misprescription_count, total_conversations
             
         except Exception as e:
             print(f"❌ Error calculating misprescription percentage: {str(e)}")
-            return 0.0
+            return 0.0, 0, 0
     
     def save_summary_report(self, percentage, dept_name):
         """Save individual department misprescription summary"""
@@ -223,8 +223,8 @@ class MisprescriptionProcessor:
             print(f"❌ Error updating cell {range_name}: {str(e)}")
             return False
 
-    def update_snapshot_sheet(self, percentage):
-        """Update misprescription percentage in snapshot sheet for yesterday's date"""
+    def update_snapshot_sheet(self, percentage, count, total):
+        """Update misprescription count and percentage in snapshot sheet for yesterday's date"""
         try:
             if not self.service:
                 print("❌ Google Sheets API not available")
@@ -244,12 +244,13 @@ class MisprescriptionProcessor:
                 print(f"⚠️ Could not find date {yesterday.strftime('%Y-%m-%d')} in snapshot sheet")
                 return False
             
-            # Update the cell with misprescription percentage
+            # Update the cell with misprescription count and percentage
             range_name = f"Data!{col_letter}{date_row}"
-            success = self.update_cell_value(range_name, f"{percentage}%")
+            value = f"{count} ({percentage}% of prescriptions sent)"
+            success = self.update_cell_value(range_name, value)
             
             if success:
-                print(f"📊 Updated snapshot sheet with misprescription percentage: {percentage}% for {yesterday.strftime('%Y-%m-%d')}")
+                print(f"📊 Updated snapshot sheet with misprescription: {count} ({percentage}%) for {yesterday.strftime('%Y-%m-%d')}")
             
             return success
             
@@ -291,15 +292,19 @@ class MisprescriptionProcessor:
         print(f"📁 Found {len(files)} misprescription file(s) to process")
         
         total_percentage = 0
+        total_count = 0
+        total_conversations = 0
         successful_files = 0
         
         for filepath, dept_key, filename in files:
             print(f"\n📊 Processing {filename}...")
             
             # Calculate percentage for this department
-            percentage = self.calculate_misprescription_percentage(filepath)
+            result = self.calculate_misprescription_percentage(filepath)
             
-            if percentage is not None:
+            if result and result[0] is not None:
+                percentage, count, conversations = result
+                
                 # Create proper department name
                 dept_name = dept_key.replace('_', ' ').title()
                 
@@ -311,9 +316,11 @@ class MisprescriptionProcessor:
                 self.save_summary_report(percentage, dept_name)
                 
                 total_percentage += percentage
+                total_count += count
+                total_conversations += conversations
                 successful_files += 1
                 
-                print(f"✅ {dept_name}: {percentage}% misprescription cases")
+                print(f"✅ {dept_name}: {count} ({percentage}%) misprescription cases")
             
             else:
                 print(f"❌ Failed to process {filename}")
@@ -321,9 +328,9 @@ class MisprescriptionProcessor:
         # Update snapshot sheet with average percentage if we have data
         if successful_files > 0:
             average_percentage = total_percentage / successful_files
-            self.update_snapshot_sheet(round(average_percentage, 1))
+            self.update_snapshot_sheet(round(average_percentage, 1), total_count, total_conversations)
             print(f"\n📈 Misprescription analysis completed!")
-            print(f"   Average misprescription percentage: {average_percentage:.1f}%")
+            print(f"   Total misprescription cases: {total_count} ({average_percentage:.1f}%) of prescriptions sent")
             print(f"   Processed {successful_files} department(s)")
         else:
             print("\n⚠️ No valid misprescription data found to process")
