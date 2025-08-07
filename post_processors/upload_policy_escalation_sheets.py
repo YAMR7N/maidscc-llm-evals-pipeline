@@ -206,8 +206,8 @@ class PolicyEscalationUploader:
             print(f"❌ Error uploading DataFrame to {sheet_name}: {str(e)}")
             return False
     
-    def process_frequency_analysis(self, date_folder, date_str):
-        """Process and upload policy frequency analysis to summary sheet"""
+    def process_frequency_analysis(self, date_folder, date_str, department_key=None):
+        """Process and upload policy frequency analysis to summary sheet for a specific department"""
         try:
             print(f"\n📊 Processing Policy Frequency Analysis for summary sheet...")
             
@@ -221,6 +221,17 @@ class PolicyEscalationUploader:
             frequency_files = []
             for filename in os.listdir(analysis_dir):
                 if filename.endswith('_Policy_Frequency_Analysis.csv'):
+                    # If department_key is specified, only process that department's file
+                    if department_key:
+                        # Convert department key to match filename format
+                        dept_name_in_file = department_key.replace('_', ' ').title()
+                        if dept_name_in_file == 'Mv Resolvers':
+                            dept_name_in_file = 'MV Resolvers'
+                        
+                        # Skip if this file is not for the specified department
+                        if not filename.startswith(dept_name_in_file):
+                            continue
+                    
                     filepath = os.path.join(analysis_dir, filename)
                     # Extract department from filename
                     dept_name = filename.replace('_Policy_Frequency_Analysis.csv', '')
@@ -358,7 +369,7 @@ class PolicyEscalationUploader:
             for dept_key, sheet_id in uploaded_departments:
                 self.policy_escalation_sheet_id = sheet_id  # Set for this department's summary
                 print(f"\n📊 Processing frequency analysis for {dept_key}...")
-                self.process_frequency_analysis(date_folder, date_str)
+                self.process_frequency_analysis(date_folder, date_str, department_key=dept_key)
                 print(f"📋 {dept_key.title()} Sheet URL: https://docs.google.com/spreadsheets/d/{sheet_id}")
             
             return True
