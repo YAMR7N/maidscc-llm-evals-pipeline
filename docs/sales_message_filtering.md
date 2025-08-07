@@ -15,10 +15,11 @@ This feature automatically filters out automated sales messages from conversatio
 1. **Department Check**: Only applies to MV Sales and CC Sales departments
 2. **Format Check**: Only works with JSON format (not segmented, XML, etc.)
 3. **Message Filtering**: Removes messages that match the excluded list with:
+   - **70% similarity matching** using sequence matching algorithm
    - Case-insensitive comparison
    - Whitespace normalization
    - Unicode character handling
-   - Partial match detection for robustness
+   - Containment detection (80% threshold) for messages embedded in longer responses
 
 ### Excluded Messages
 
@@ -40,6 +41,8 @@ python3 scripts/run_pipeline.py --prompt rule_breaking --departments "MV Sales" 
 # Or using the shell script
 ./run_all.sh rb "MV Sales" --with-upload
 ```
+
+The similarity threshold (default: 70%) can be adjusted in the code if needed for stricter or more flexible matching.
 
 ### Important Notes
 

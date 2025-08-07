@@ -22,6 +22,7 @@ echo "  call_request       Run call request analysis (gemini-2.5-pro, xml)"
 echo "  threatening        Run threatening analysis (gemini-2.5-pro, segmented)"
 echo "  misprescription    Run misprescription analysis (gemini-2.5-flash, depends on categorizing)"
 echo "  unnecessary_clinic_rec Run unnecessary clinic rec analysis (gemini-2.5-flash, depends on categorizing)"
+echo "  loss_of_interest   Run loss of interest analysis (gemini-2.5-pro, xml)"
     echo ""
     echo "Options:"
     echo "  --departments DEPTS    Comma-separated departments or 'all'"
@@ -43,6 +44,7 @@ echo "  $0 call_request --departments \"MV Resolvers\" # Call request analysis"
 echo "  $0 threatening --departments \"MV Resolvers\" # Threatening analysis"
 echo "  $0 misprescription --departments \"Doctors\" # Misprescription analysis (requires categorizing first)"
 echo "  $0 unnecessary_clinic_rec --departments \"Doctors\" # Unnecessary clinic rec analysis (requires categorizing first)"
+echo "  $0 loss_of_interest --departments \"Filipina\" # Loss of interest analysis for Filipina dept"
 echo "  $0 categorizing --format xml3d --departments \"MV Resolvers\" # Multi-day customer view"
 echo "  $0 ftr                                   # FTR analysis"
 }
@@ -56,7 +58,7 @@ DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        sa|rb|ftr|false_promises|categorizing|policy_escalation|client_suspecting_ai|clarity_score|legal_alignment|call_request|threatening|misprescription|unnecessary_clinic_rec) COMMAND="$1"; shift ;;
+        sa|rb|ftr|false_promises|categorizing|policy_escalation|client_suspecting_ai|clarity_score|legal_alignment|call_request|threatening|misprescription|unnecessary_clinic_rec|loss_of_interest) COMMAND="$1"; shift ;;
         --departments) DEPARTMENTS="$2"; shift 2 ;;
         --model) MODEL="$2"; shift 2 ;;
         --format) FORMAT="$2"; shift 2 ;;
@@ -87,6 +89,7 @@ case $COMMAND in
     threatening) PROMPT="threatening"; MODEL="${MODEL:-gemini-2.5-pro}"; FORMAT="${FORMAT:-segmented}" ;;
 misprescription) PROMPT="misprescription"; MODEL="${MODEL:-gemini-2.5-flash}"; FORMAT="${FORMAT:-xml}" ;;
 unnecessary_clinic_rec) PROMPT="unnecessary_clinic_rec"; MODEL="${MODEL:-gemini-2.5-flash}"; FORMAT="${FORMAT:-xml}" ;;
+loss_of_interest) PROMPT="loss_of_interest"; MODEL="${MODEL:-gemini-2.5-pro}"; FORMAT="${FORMAT:-xml}" ;;
 esac
 
 CMD="python3 scripts/run_pipeline.py --prompt $PROMPT --departments \"$DEPARTMENTS\" --format $FORMAT --model $MODEL"

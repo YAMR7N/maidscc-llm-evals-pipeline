@@ -6,9 +6,28 @@ MODELS = {
     "gpt-4o": {"provider": "openai", "temperature": 0.0},
     "o4-mini": {"provider": "openai", "temperature": 0.0},
     "gpt-4o-mini": {"provider": "openai", "temperature": 0.0},
-    "gemini-1.5-pro": {"provider": "gemini", "temperature": 0.0},
-    "gemini-1.5-flash": {"provider": "gemini", "temperature": 0.0},
-    "gemini-2.0-flash-exp": {"provider": "gemini", "temperature": 0.0},
+    "gemini-1.5-pro": {
+        "provider": "gemini", 
+        "temperature": 0.0,
+        # Retry configuration (optional - defaults shown)
+        "max_retries": 3,
+        "base_delay": 1.0,
+        "max_delay": 30.0,
+        "timeout_seconds": 60.0
+    },
+    "gemini-1.5-flash": {
+        "provider": "gemini", 
+        "temperature": 0.0,
+        # Using default retry settings
+    },
+    "gemini-2.0-flash-exp": {
+        "provider": "gemini", 
+        "temperature": 0.0,
+        # Example of more aggressive retry settings
+        "max_retries": 5,
+        "base_delay": 2.0,
+        "timeout_seconds": 90.0
+    },
     "gemini-2.5-pro": {"provider": "gemini", "temperature": 0.2},
     "gemini-2.5-flash": {
         "provider": "gemini", 

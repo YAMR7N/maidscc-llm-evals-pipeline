@@ -131,19 +131,23 @@ def convert_conversation_to_xml(csv_path, target_skills=None):
     xml_conversations = []
     
     # Default target skills if none provided
+    # If target_skills is None, we want to include ALL conversations
+    include_all = False
     if target_skills is None:
-        target_skills = ["GPT_RESOLVERS_BOT", "GPT_MV_RESOLVERS"]
+        include_all = True
+        target_skills = ["GPT_RESOLVERS_BOT", "GPT_MV_RESOLVERS"]  # Keep for backward compatibility
 
     processed_count = 0
     for conv_id in conversation_ids:
         # Filter messages for this conversation
         conv_messages = df[df['Conversation ID'] == conv_id]
 
-        # Check if conversation contains target skills
-        skills_series = conv_messages['Skill'].fillna('')
-        skills = list(set(skills_series.tolist()))
-        if not any(skill in target_skills for skill in skills):
-            continue
+        # Check if conversation contains target skills (skip check if include_all)
+        if not include_all:
+            skills_series = conv_messages['Skill'].fillna('')
+            skills = list(set(skills_series.tolist()))
+            if not any(skill in target_skills for skill in skills):
+                continue
 
         # Get unique participants
         sent_by_series = conv_messages['Sent By'].fillna('')
@@ -164,8 +168,8 @@ def convert_conversation_to_xml(csv_path, target_skills=None):
         last_message_sender = None
         last_message_type = None
         
-        # Track the last skill seen in the conversation
-        last_skill = ""
+        # Track all unique skills seen in the conversation in chronological order
+        skills_chronological = []
         
         # Process each message
         for _, row in conv_messages.iterrows():
@@ -205,9 +209,10 @@ def convert_conversation_to_xml(csv_path, target_skills=None):
                           current_sender == last_message_sender and 
                           current_type == last_message_type)
             
-            # Update last skill if we have a skill value and this is not a duplicate
+            # Add skill to chronological list if it's new and not a duplicate
             if current_skill and not is_duplicate and current_skill != "nan":
-                last_skill = current_skill
+                if current_skill not in skills_chronological:
+                    skills_chronological.append(current_skill)
             
             # Add tool message if it exists
             if pd.notna(row['Tools']):
@@ -250,11 +255,11 @@ def convert_conversation_to_xml(csv_path, target_skills=None):
 </content>
 </conversation>"""
             
-            # Add to conversations list with last_skill column
+            # Add to conversations list with unique_skills column
             xml_conversations.append({
                 'conversation_id': str(conv_id),
                 'content_xml_view': full_xml,
-                'last_skill': last_skill
+                'unique_skills': ','.join(skills_chronological) if skills_chronological else ''
             })
             
             processed_count += 1
@@ -264,7 +269,7 @@ def convert_conversation_to_xml(csv_path, target_skills=None):
 
 
 def save_conversations_to_csv(conversations, output_path):
-    """Save conversations to CSV with columns: conversation_id, content_xml_view, last_skill"""
+    """Save conversations to CSV with columns: conversation_id, content_xml_view, unique_skills"""
     df = pd.DataFrame(conversations)
     df.to_csv(output_path, index=False, encoding='utf-8')
     print(f"💾 Saved XML conversations to: {output_path}")

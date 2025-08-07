@@ -23,6 +23,9 @@ def clean_raw_data(csv_path, output_path, filter_agent_messages=False):
     # Read the CSV file
     df = pd.read_csv(csv_path)
     
+    # Strip whitespace from column names to handle inconsistent exports
+    df.columns = df.columns.str.strip()
+    
     # Note: Datetime cleaning already done in fetchtableau.py, no need to clean again
     
     # Convert datetime columns (cleaning already done in main script)

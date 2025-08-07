@@ -33,6 +33,9 @@ SHEETS_CONFIG = {
         'Filipina': '1ADrFeuqrq9O6quOCcjdkseiWU1H2q5a13_Gxri1mUao',
         'Delighters': '1Zjvd2tGbs7ibmOv8V62Y6sYlL_INu5IgvVRR-Q5Nnq4',
         'CC Resolvers': '19GiEzoFz81sZ1rRYHkvabh_yNvtEndhnjtFDvmKt_bM'
+    },
+    "loss_of_interest_sheets": {
+        'Filipina': '1GJXyFqiM1gn-jbWVEVI3TfIrFU3Ld8BQOPQFb-gMDaE'
     }
 }
 

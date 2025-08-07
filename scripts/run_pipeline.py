@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 import aiohttp
+import random
 
 # Load environment variables from .env file
 load_dotenv()
@@ -143,19 +144,26 @@ class LLMProcessor:
             print(f"❌ System prompt fetch failed for {chat_id}: {str(e)}")
             return None
     
-    def get_max_tokens(self):
-        """Calculate dynamic token limits based on model type"""
+    def get_max_tokens(self, retry_multiplier=1):
+        """Calculate dynamic token limits based on model type
+        
+        Args:
+            retry_multiplier: Multiply token limit by this factor (e.g., 2 for retries)
+        """
+        base_tokens = 16000  # Default
+        
         if self.provider == "openai":
             # OpenAI: o4/o3 series get 30k, others get 16k
             if "o4" in self.model or "o3" in self.model:
-                return 30000
+                base_tokens = 30000
             else:
-                return 16000
+                base_tokens = 16000
         elif self.provider == "gemini":
             # Gemini: Always 20k
-            return 20000
-        else:
-            return 16000  # Default fallback
+            base_tokens = 20000
+        
+        # Apply retry multiplier
+        return base_tokens * retry_multiplier
         
     def clean_datetime_columns_df(self, df):
         """Clean datetime columns by removing invisible Unicode characters - NON-DESTRUCTIVE"""
@@ -231,9 +239,9 @@ class LLMProcessor:
                         return {"skip_conversation": True, "reason": "no_system_prompt"}
                 
                 if self.provider == "openai":
-                    return await self._analyze_with_openai(conversation, final_prompt)
+                    return await self._analyze_with_openai_with_retry(conversation, final_prompt, chat_id)
                 elif self.provider == "gemini":
-                    return await self._analyze_with_gemini(conversation, final_prompt, chat_id)
+                    return await self._analyze_with_gemini_with_retry(conversation, final_prompt, chat_id)
                 else:
                     return {"llm_output": "", "error": f"Unsupported provider: {self.provider}"}
                     
@@ -241,7 +249,79 @@ class LLMProcessor:
                 print(f"🚨 LLM Error for conversation: {str(e)[:100]}...")
                 return {"llm_output": "", "error": f"{self.provider} error: {str(e)}"}
     
-    async def _analyze_with_openai(self, conversation, prompt):
+    async def _analyze_with_openai_with_retry(self, conversation, prompt, chat_id=None):
+        """Wrapper for OpenAI API calls with retry logic and doubled tokens on retry"""
+        max_retries = 3
+        base_delay = 1.0
+        max_delay = 30.0
+        timeout_seconds = 60.0
+        
+        chat_id_display = chat_id[-8:] if chat_id and len(chat_id) > 8 else chat_id or "unknown"
+        
+        for attempt in range(max_retries):
+            try:
+                # Use asyncio timeout for each attempt
+                async with asyncio.timeout(timeout_seconds):
+                    # Double tokens on retry (attempt 0 = normal, attempt 1+ = doubled)
+                    token_multiplier = 2 if attempt > 0 else 1
+                    
+                    if attempt > 0:
+                        print(f"🔄 Retry {attempt}/{max_retries - 1} with {token_multiplier}x tokens ({self.get_max_tokens(token_multiplier):,} tokens)")
+                    
+                    result = await self._analyze_with_openai(conversation, prompt, retry_attempt=attempt)
+                    
+                # If successful, return the result
+                if result and not result.get("error"):
+                    return result
+                    
+                # If empty response but no error, still consider it a success
+                if result and result.get("llm_output") == "(empty)":
+                    return result
+                    
+            except asyncio.TimeoutError:
+                if attempt < max_retries - 1:
+                    # Calculate exponential backoff with jitter
+                    delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
+                    print(f"⏱️  Timeout for {chat_id_display} (attempt {attempt + 1}/{max_retries}). Retrying in {delay:.1f}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    print(f"❌ Timeout for {chat_id_display} after {max_retries} attempts")
+                    return {"llm_output": "", "error": f"Timeout after {max_retries} attempts"}
+                    
+            except Exception as e:
+                error_msg = str(e)
+                
+                # Check if it's a rate limit error
+                is_rate_limit = any(phrase in error_msg.lower() for phrase in [
+                    "rate limit", "rate_limit", "429", "too many requests", "insufficient_quota"
+                ])
+                
+                # Check if it's a server error that might be transient
+                is_server_error = any(phrase in error_msg.lower() for phrase in [
+                    "500", "502", "503", "504", "server_error", "internal server error"
+                ])
+                
+                if attempt < max_retries - 1 and (is_rate_limit or is_server_error):
+                    # Calculate exponential backoff with jitter
+                    delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
+                    
+                    # For rate limits, use a longer delay
+                    if is_rate_limit:
+                        delay = max(delay, 5.0)  # At least 5 seconds for rate limits
+                    
+                    print(f"⚠️  OpenAI error for {chat_id_display}: {error_msg[:100]}...")
+                    print(f"🔄 Retrying (attempt {attempt + 1}/{max_retries}) in {delay:.1f}s...")
+                    
+                    await asyncio.sleep(delay)
+                else:
+                    # Final attempt failed or non-retryable error
+                    print(f"❌ OpenAI error for {chat_id_display} after {attempt + 1} attempts: {error_msg[:100]}...")
+                    return {"llm_output": "", "error": f"OpenAI error after {attempt + 1} attempts: {error_msg}"}
+        
+        # Should not reach here, but just in case
+        return {"llm_output": "", "error": f"Failed after {max_retries} attempts"}
+    
+    async def _analyze_with_openai(self, conversation, prompt, retry_attempt=0):
         """Analyze conversation using OpenAI"""
         # Match working message structure exactly
         messages = [
@@ -250,7 +330,9 @@ class LLMProcessor:
         ]
         
         # Use appropriate token parameter based on model type
-        max_tokens = self.get_max_tokens()
+        # Double tokens on retry (attempt 0 = normal, attempt 1+ = doubled)
+        token_multiplier = 2 if retry_attempt > 0 else 1
+        max_tokens = self.get_max_tokens(token_multiplier)
         
         if "o4-mini" in self.model or "o3" in self.model:
             # o-series models require max_completion_tokens
@@ -293,7 +375,79 @@ class LLMProcessor:
         
         return {"llm_output": result}
     
-    async def _analyze_with_gemini(self, conversation, prompt, chat_id=None):
+    async def _analyze_with_gemini_with_retry(self, conversation, prompt, chat_id=None):
+        """Wrapper for Gemini API calls with retry logic and doubled tokens on retry"""
+        max_retries = 3
+        base_delay = 1.0
+        max_delay = 30.0
+        timeout_seconds = 60.0
+        
+        chat_id_display = chat_id[-8:] if chat_id and len(chat_id) > 8 else chat_id or "unknown"
+        
+        for attempt in range(max_retries):
+            try:
+                # Use asyncio timeout for each attempt
+                async with asyncio.timeout(timeout_seconds):
+                    # Double tokens on retry (attempt 0 = normal, attempt 1+ = doubled)
+                    token_multiplier = 2 if attempt > 0 else 1
+                    
+                    if attempt > 0:
+                        print(f"🔄 Retry {attempt}/{max_retries - 1} with {token_multiplier}x tokens ({self.get_max_tokens(token_multiplier):,} tokens)")
+                    
+                    result = await self._analyze_with_gemini(conversation, prompt, chat_id, retry_attempt=attempt)
+                    
+                # If successful, return the result
+                if result and not result.get("error"):
+                    return result
+                    
+                # If empty response but no error, still consider it a success
+                if result and result.get("llm_output") == "(empty)":
+                    return result
+                    
+            except asyncio.TimeoutError:
+                if attempt < max_retries - 1:
+                    # Calculate exponential backoff with jitter
+                    delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
+                    print(f"⏱️  Timeout for {chat_id_display} (attempt {attempt + 1}/{max_retries}). Retrying in {delay:.1f}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    print(f"❌ Timeout for {chat_id_display} after {max_retries} attempts")
+                    return {"llm_output": "", "error": f"Timeout after {max_retries} attempts"}
+                    
+            except Exception as e:
+                error_msg = str(e)
+                
+                # Check if it's a rate limit or quota error
+                is_rate_limit = any(phrase in error_msg.lower() for phrase in [
+                    "rate limit", "quota", "resource exhausted", "429", "too many requests"
+                ])
+                
+                # Check if it's a server error that might be transient
+                is_server_error = any(phrase in error_msg.lower() for phrase in [
+                    "500", "502", "503", "504", "server error", "service unavailable"
+                ])
+                
+                if attempt < max_retries - 1 and (is_rate_limit or is_server_error):
+                    # Calculate exponential backoff with jitter
+                    delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
+                    
+                    # For rate limits, use a longer delay
+                    if is_rate_limit:
+                        delay = max(delay, 5.0)  # At least 5 seconds for rate limits
+                    
+                    print(f"⚠️  Gemini error for {chat_id_display}: {error_msg[:100]}...")
+                    print(f"🔄 Retrying (attempt {attempt + 1}/{max_retries}) in {delay:.1f}s...")
+                    
+                    await asyncio.sleep(delay)
+                else:
+                    # Final attempt failed or non-retryable error
+                    print(f"❌ Gemini error for {chat_id_display} after {attempt + 1} attempts: {error_msg[:100]}...")
+                    return {"llm_output": "", "error": f"Gemini error after {attempt + 1} attempts: {error_msg}"}
+        
+        # Should not reach here, but just in case
+        return {"llm_output": "", "error": f"Failed after {max_retries} attempts"}
+    
+    async def _analyze_with_gemini(self, conversation, prompt, chat_id=None, retry_attempt=0):
         """Analyze conversation using Gemini"""
         # Combine system prompt and user message for Gemini
         full_prompt = f"{prompt}\n\nUser conversation:\n{conversation}"
@@ -304,8 +458,10 @@ class LLMProcessor:
         
         def _generate_content():
             # Build generation config with advanced parameters
+            # Double tokens on retry (attempt 0 = normal, attempt 1+ = doubled)
+            token_multiplier = 2 if retry_attempt > 0 else 1
             gen_config = genai.types.GenerationConfig(
-                max_output_tokens=self.get_max_tokens(),
+                max_output_tokens=self.get_max_tokens(token_multiplier),
                 temperature=self.model_config.get("temperature", 0.0)
             )
             
@@ -322,7 +478,7 @@ class LLMProcessor:
                 
                 # Create generation config with thinking parameters included
                 gen_config_dict = {
-                    "max_output_tokens": self.get_max_tokens(),
+                    "max_output_tokens": self.get_max_tokens(token_multiplier),
                     "temperature": self.model_config.get("temperature", 0.0),
                     "include_thoughts": False,
                     "thinking_budget": 0
@@ -450,7 +606,7 @@ class LLMProcessor:
             conversation_data.append((chat_id, customer_name, conversation_text))
         
         print(f"🤖 Processing {len(tasks)} conversations through {self.model} ({self.provider})...")
-        print(f"🔧 Using {self.get_max_tokens():,} token limit for {self.model}")
+        print(f"🔧 Using {self.get_max_tokens():,} token limit for {self.model} (doubles on retry)")
         
         # Wait for all conversations to be processed
         task_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -520,15 +676,16 @@ class LLMProcessor:
                 f"({self.token_usage['total_input_tokens']:,}→{self.token_usage['total_output_tokens']:,}) "
                 f"for {self.token_usage['conversations_processed']} conversations")
 
-def download_tableau_data(department: str, days_lookback: int = 1) -> str:
+def download_tableau_data(department: str, days_lookback: int = 1, target_date: datetime = None) -> str:
     """Download data from Tableau for a department with caching and view sharing"""
     dept_config = DEPARTMENTS[department]
     tableau_view = dept_config['tableau_view']
     
-    # Use yesterday's date for all operations
-    yesterday = datetime.now() - timedelta(days=1)
-    start_date = yesterday - timedelta(days=days_lookback-1)
-    yesterday_str = yesterday.strftime('%Y%m%d')
+    # Use target_date if provided, otherwise use yesterday's date
+    if target_date is None:
+        target_date = datetime.now() - timedelta(days=1)
+    start_date = target_date - timedelta(days=days_lookback-1)
+    target_date_str = target_date.strftime('%Y%m%d')
     
     # Check for shared views (African, Ethiopian, Filipina all use "Applicants")
     view_sharing_map = {
@@ -542,8 +699,8 @@ def download_tableau_data(department: str, days_lookback: int = 1) -> str:
         canonical_dept = view_sharing_map[tableau_view][0]
     
     # Check cache first
-    cache_filename = f"{canonical_dept}_{yesterday_str}.csv"
-    date_folder = yesterday.strftime('%Y-%m-%d')
+    cache_filename = f"{canonical_dept}_{target_date_str}.csv"
+    date_folder = target_date.strftime('%Y-%m-%d')
     cache_filepath = f"outputs/tableau_exports/{date_folder}/{cache_filename}"
     
     if os.path.exists(cache_filepath):
@@ -560,7 +717,7 @@ def download_tableau_data(department: str, days_lookback: int = 1) -> str:
         workbook_name="8 Department wise tables for chats & calls",
         view_name=tableau_view,
         from_date=start_date.strftime('%Y-%m-%d'),
-        to_date=yesterday.strftime('%Y-%m-%d'),
+        to_date=target_date.strftime('%Y-%m-%d'),
         output=cache_filename,
         required_headers=required_headers
     )
@@ -574,7 +731,7 @@ def download_tableau_data(department: str, days_lookback: int = 1) -> str:
     
     return filepath
 
-def preprocess_data(raw_file: str, department: str, format_type: str, filter_agent_messages: bool = False) -> str:
+def preprocess_data(raw_file: str, department: str, format_type: str, filter_agent_messages: bool = False, target_date: datetime = None, include_all_skills: bool = False) -> str:
     """Preprocess raw data based on format type
     
     Args:
@@ -582,12 +739,14 @@ def preprocess_data(raw_file: str, department: str, format_type: str, filter_age
         department: Department name
         format_type: Format type (json, xml, segmented, transparent)
         filter_agent_messages: If True, removes all agent messages from the data
+        target_date: Target date for processing, defaults to yesterday
     """
     
     # Check if preprocessing output already exists (caching)
-    if check_preprocessed_output_exists(department, format_type):
-        yesterday = datetime.now() - timedelta(days=1)
-        date_folder = yesterday.strftime('%Y-%m-%d')
+    if check_preprocessed_output_exists(department, format_type, target_date):
+        if target_date is None:
+            target_date = datetime.now() - timedelta(days=1)
+        date_folder = target_date.strftime('%Y-%m-%d')
         
         # Generate expected filename and return cached path
         if format_type == "segmented":
@@ -606,7 +765,7 @@ def preprocess_data(raw_file: str, department: str, format_type: str, filter_age
     print(f"🔄 Preprocessing data for {department} in {format_type} format...")
     
     dept_config = DEPARTMENTS[department]
-    target_skills = dept_config['skills']
+    target_skills = dept_config['skills'] if not include_all_skills else None
     
     # Clean datetime columns first (non-destructive)
     df = pd.read_csv(raw_file)
@@ -619,8 +778,9 @@ def preprocess_data(raw_file: str, department: str, format_type: str, filter_age
     
     try:
         # Create date-based subfolder for preprocessing output
-        yesterday = datetime.now() - timedelta(days=1)
-        date_folder = yesterday.strftime('%Y-%m-%d')
+        if target_date is None:
+            target_date = datetime.now() - timedelta(days=1)
+        date_folder = target_date.strftime('%Y-%m-%d')
         preprocessing_dir = f"outputs/preprocessing_output/{date_folder}"
         os.makedirs(preprocessing_dir, exist_ok=True)
         
@@ -685,7 +845,7 @@ def load_preprocessed_data(file_path: str, format_type: str) -> List[Dict]:
             conversations.append({
                 'conversation_id': row['conversation_id'],
                 'content_xml_view': row['content_xml_view'], 
-                'last_skill': row['last_skill']
+                'unique_skills': row['unique_skills']
             })
         return conversations
     elif format_type == "xml3d":
@@ -709,11 +869,12 @@ async def run_llm_processing(conversations: List[Dict], prompt_text: str, model:
     results = await processor.process_conversations(conversations, prompt_text)
     return results, processor
 
-def check_llm_output_exists(department: str, prompt_type: str) -> bool:
+def check_llm_output_exists(department: str, prompt_type: str, target_date: datetime = None) -> bool:
     """Check if LLM output already exists for a department and date"""
-    yesterday = datetime.now() - timedelta(days=1)
-    date_folder = yesterday.strftime('%Y-%m-%d')
-    date_str = yesterday.strftime('%m_%d')
+    if target_date is None:
+        target_date = datetime.now() - timedelta(days=1)
+    date_folder = target_date.strftime('%Y-%m-%d')
+    date_str = target_date.strftime('%m_%d')
     dept_name = department.lower().replace(' ', '_')
     
     if prompt_type == "sentiment_analysis":
@@ -742,10 +903,11 @@ def check_llm_output_exists(department: str, prompt_type: str) -> bool:
     
     return False
 
-def check_preprocessed_output_exists(department: str, format_type: str) -> bool:
+def check_preprocessed_output_exists(department: str, format_type: str, target_date: datetime = None) -> bool:
     """Check if preprocessed output already exists for a department and date"""
-    yesterday = datetime.now() - timedelta(days=1)
-    date_folder = yesterday.strftime('%Y-%m-%d')
+    if target_date is None:
+        target_date = datetime.now() - timedelta(days=1)
+    date_folder = target_date.strftime('%Y-%m-%d')
     
     # Generate expected filename based on format
     if format_type == "segmented":
@@ -786,12 +948,14 @@ def check_preprocessed_output_exists(department: str, format_type: str) -> bool:
     
     return False
 
-def save_llm_outputs(results: List[Dict], department: str, prompt_type: str) -> str:
+def save_llm_outputs(results: List[Dict], department: str, prompt_type: str, target_date: datetime = None) -> str:
     """Save LLM outputs to expected location"""
     import json
     
     # Generate output filename
-    date_str = (datetime.now() - timedelta(days=1)).strftime('%m_%d')
+    if target_date is None:
+        target_date = datetime.now() - timedelta(days=1)
+    date_str = target_date.strftime('%m_%d')
     dept_name = department.lower().replace(' ', '_')
     
     if prompt_type == "sentiment_analysis":
@@ -806,8 +970,7 @@ def save_llm_outputs(results: List[Dict], department: str, prompt_type: str) -> 
         filename = f"{prompt_type}_{dept_name}_{date_str}.csv"
     
     # Create date-based subfolder 
-    yesterday = datetime.now() - timedelta(days=1)
-    date_folder = yesterday.strftime('%Y-%m-%d')
+    date_folder = target_date.strftime('%Y-%m-%d')
     output_dir = f"outputs/LLM_outputs/{date_folder}"
     os.makedirs(output_dir, exist_ok=True)
     
@@ -844,7 +1007,7 @@ def save_llm_outputs(results: List[Dict], department: str, prompt_type: str) -> 
     print(f"💾 Saved LLM outputs: {output_path}")
     return output_path
 
-def run_sentiment_analysis(departments, model, format_type, with_upload=False, dry_run=False):
+def run_sentiment_analysis(departments, model, format_type, with_upload=False, dry_run=False, target_date=None):
     """Run complete sentiment analysis pipeline"""
     print(f"📊 Running Sentiment Analysis Pipeline")
     print(f"   Departments: {departments}")
@@ -874,15 +1037,15 @@ def run_sentiment_analysis(departments, model, format_type, with_upload=False, d
             
             try:
                 # Check if LLM outputs already exist (caching)
-                if check_llm_output_exists(department, "sentiment_analysis"):
+                if check_llm_output_exists(department, "sentiment_analysis", target_date):
                     print(f"⚡ Skipping LLM processing for {department} - using cached results")
                     continue
                 
                 # Step 1: Download from Tableau
-                raw_file = download_tableau_data(department, days_lookback=1)
+                raw_file = download_tableau_data(department, days_lookback=1, target_date=target_date)
                 
                 # Step 2: Preprocess data
-                processed_file = preprocess_data(raw_file, department, format_type)
+                processed_file = preprocess_data(raw_file, department, format_type, target_date=target_date)
                 
                 # Step 3: Load preprocessed data
                 conversations = load_preprocessed_data(processed_file, format_type)
@@ -895,7 +1058,7 @@ def run_sentiment_analysis(departments, model, format_type, with_upload=False, d
                 results, processor = asyncio.run(run_llm_processing(conversations, prompt_text, model))
                 
                 # Step 5: Save outputs
-                save_llm_outputs(results, department, "sentiment_analysis")
+                save_llm_outputs(results, department, "sentiment_analysis", target_date)
                 
                 # Display token usage
                 print(processor.get_token_summary(department))
@@ -936,7 +1099,7 @@ def run_sentiment_analysis(departments, model, format_type, with_upload=False, d
                     print(f"  {dept}: Failed")
             
             # Upload files (this will only upload files that exist)
-            uploader = SaprompUploader()
+            uploader = SaprompUploader(target_date=target_date)
             uploader.process_all_files()
         
         print("🎉 Sentiment Analysis pipeline completed successfully!")
@@ -946,7 +1109,7 @@ def run_sentiment_analysis(departments, model, format_type, with_upload=False, d
         print(f"❌ SA Pipeline failed: {str(e)}")
         return False
 
-def run_rule_breaking(departments, model, format_type, with_upload=False, dry_run=False):
+def run_rule_breaking(departments, model, format_type, with_upload=False, dry_run=False, target_date=None):
     """Run complete rule breaking analysis pipeline"""
     print(f"🚨 Running Rule Breaking Analysis Pipeline")
     print(f"   Departments: {departments}")
@@ -976,7 +1139,7 @@ def run_rule_breaking(departments, model, format_type, with_upload=False, dry_ru
             
             try:
                 # Check if LLM outputs already exist (caching)
-                if check_llm_output_exists(department, "rule_breaking"):
+                if check_llm_output_exists(department, "rule_breaking", target_date):
                     print(f"⚡ Skipping LLM processing for {department} - using cached results")
                     continue
                 
@@ -984,10 +1147,10 @@ def run_rule_breaking(departments, model, format_type, with_upload=False, dry_ru
                 prompt_text = rb_prompt.get_prompt_text(department)
                 
                 # Step 1: Download from Tableau
-                raw_file = download_tableau_data(department, days_lookback=1)
+                raw_file = download_tableau_data(department, days_lookback=1, target_date=target_date)
                 
                 # Step 2: Preprocess data
-                processed_file = preprocess_data(raw_file, department, format_type)
+                processed_file = preprocess_data(raw_file, department, format_type, target_date=target_date)
                 
                 # Step 3: Load preprocessed data
                 conversations = load_preprocessed_data(processed_file, format_type)
@@ -1001,7 +1164,8 @@ def run_rule_breaking(departments, model, format_type, with_upload=False, dry_ru
                     from utils.sales_message_filter import filter_sales_conversations
                     print(f"🔧 Filtering automated sales messages for {department}...")
                     original_count = len(conversations)
-                    conversations = filter_sales_conversations(conversations, [department])
+                    # Use 70% similarity threshold for flexible matching
+                    conversations = filter_sales_conversations(conversations, [department], similarity_threshold=0.7)
                     filtered_count = len(conversations)
                     if original_count > filtered_count:
                         print(f"   Conversations after filtering: {filtered_count} (from {original_count})")
@@ -1010,7 +1174,7 @@ def run_rule_breaking(departments, model, format_type, with_upload=False, dry_ru
                 results, processor = asyncio.run(run_llm_processing(conversations, prompt_text, model))
                 
                 # Step 5: Save outputs
-                save_llm_outputs(results, department, "rule_breaking")
+                save_llm_outputs(results, department, "rule_breaking", target_date)
                 
                 # Display token usage
                 print(processor.get_token_summary(department))
@@ -1447,7 +1611,7 @@ def run_categorizing_analysis(departments, model, format_type, with_upload=False
         print(f"❌ Categorizing Pipeline failed: {str(e)}")
         return False
 
-def run_policy_escalation_analysis(departments, model, format_type, with_upload=False, dry_run=False):
+def run_policy_escalation_analysis(departments, model, format_type, with_upload=False, dry_run=False, target_date=None):
     """Run complete Policy Escalation analysis pipeline"""
     print(f"⚖️ Running Policy Escalation Analysis Pipeline")
     print(f"   Departments: {departments}")
@@ -1477,15 +1641,15 @@ def run_policy_escalation_analysis(departments, model, format_type, with_upload=
             
             try:
                 # Check if LLM outputs already exist (caching)
-                if check_llm_output_exists(department, "policy_escalation"):
+                if check_llm_output_exists(department, "policy_escalation", target_date):
                     print(f"⚡ Skipping LLM processing for {department} - using cached results")
                     continue
                 
                 # Step 1: Download from Tableau
-                raw_file = download_tableau_data(department)
+                raw_file = download_tableau_data(department, target_date=target_date)
                 
                 # Step 2: Preprocess data
-                processed_file = preprocess_data(raw_file, department, format_type)
+                processed_file = preprocess_data(raw_file, department, format_type, target_date=target_date)
                 
                 # Step 3: Load preprocessed data
                 conversations = load_preprocessed_data(processed_file, format_type)
@@ -1498,7 +1662,7 @@ def run_policy_escalation_analysis(departments, model, format_type, with_upload=
                 results, processor = asyncio.run(run_llm_processing(conversations, prompt_text, model))
                 
                 # Step 5: Save outputs
-                save_llm_outputs(results, department, "policy_escalation")
+                save_llm_outputs(results, department, "policy_escalation", target_date)
                 
                 # Display token usage
                 print(processor.get_token_summary(department))
@@ -2341,11 +2505,206 @@ def run_threatening_analysis(departments, model, format_type, with_upload=False,
         print(f"❌ Threatening Pipeline failed: {str(e)}")
         return False
 
+def run_loss_of_interest(departments, model, format_type, with_upload=False, dry_run=False, target_date=None):
+    """
+    Run Loss of Interest analysis pipeline
+    
+    This analysis uses dynamic prompts based on the department and unique skills in the conversation.
+    Only processes conversations that contain skills for which we have specific prompts.
+    Different prompts are applied based on the department and application stage where the applicant dropped off.
+    
+    Args:
+        departments: Comma-separated list of departments or 'all'
+        model: LLM model to use
+        format_type: Must be 'xml' to access unique_skills field
+        with_upload: Whether to upload results to Google Sheets
+        dry_run: Whether to run in dry-run mode
+        target_date: Target date for analysis (defaults to yesterday)
+    """
+    print(f"📊 Running Loss of Interest Analysis Pipeline")
+    print(f"   Departments: {departments}")
+    print(f"   Model: {model}")
+    print(f"   Format: {format_type}")
+    
+    if dry_run:
+        print("🔍 DRY RUN - Would execute full Loss of Interest pipeline")
+        return True
+    
+    # Force XML format for this analysis
+    if format_type != "xml":
+        print("⚠️  Switching to XML format (required for skill-based analysis)")
+        format_type = "xml"
+    
+    try:
+        # Get prompt
+        prompt_registry = PromptRegistry()
+        loss_of_interest_prompt = prompt_registry.get_prompt("loss_of_interest")
+        if not loss_of_interest_prompt:
+            print("❌ Loss of Interest prompt not found in registry")
+            return False
+        
+        # Determine departments to process
+        if departments == "all":
+            # For now, only Filipina is configured
+            dept_list = ["Filipina"]
+            print("ℹ️  Loss of Interest analysis currently configured for: Filipina")
+        else:
+            dept_list = [d.strip() for d in departments.split(',')]
+        
+        print(f"🎯 Processing departments: {dept_list}")
+        
+        for department in dept_list:
+            print(f"\n🏢 Processing {department}...")
+            
+            try:
+                # Check cache
+                if check_llm_output_exists(department, "loss_of_interest", target_date):
+                    print(f"⚡ Skipping LLM processing for {department} - using cached results")
+                    continue
+                
+                # Download and preprocess (include all skills for loss_of_interest)
+                raw_file = download_tableau_data(department, days_lookback=1, target_date=target_date)
+                processed_file = preprocess_data(raw_file, department, format_type, target_date=target_date, include_all_skills=True)
+                
+                # Load preprocessed data
+                conversations = load_preprocessed_data(processed_file, format_type)
+                
+                if not conversations:
+                    print(f"⚠️  No conversations found for {department}")
+                    continue
+                
+                # Process through LLM with skill-aware logic
+                processor = LLMProcessor(model)
+                results = []
+                tasks = []
+                
+                # Create semaphore for concurrency control
+                semaphore = asyncio.Semaphore(30)
+                
+                # Filter and prepare tasks only for conversations with matching prompts
+                skipped_count = 0
+                filtered_conversations = []
+                for conv in conversations:
+                    # Add department to conversation data for prompt selection
+                    conv_with_dept = dict(conv)
+                    conv_with_dept['department'] = department
+                    
+                    # Check if conversation has any matching prompts
+                    if not loss_of_interest_prompt.has_matching_prompt(conv_with_dept):
+                        skipped_count += 1
+                        continue
+                    
+                    # Get conversation-specific prompt based on department and unique_skills
+                    prompt_text = loss_of_interest_prompt.get_prompt_text(conv_with_dept)
+                    
+                    if prompt_text is None:
+                        skipped_count += 1
+                        continue
+                    
+                    # Create task with conversation-specific prompt
+                    task = processor.analyze_conversation(
+                        conv.get('content_xml_view', ''), 
+                        prompt_text, 
+                        semaphore,
+                        conv.get('conversation_id', 'unknown')
+                    )
+                    tasks.append(task)
+                    filtered_conversations.append(conv)
+                
+                if skipped_count > 0:
+                    print(f"ℹ️  Skipped {skipped_count} conversations without matching skill prompts")
+                
+                print(f"🤖 Processing {len(tasks)} conversations through {model}...")
+                print(f"🔧 Using dynamic prompts based on unique skills in conversations")
+                
+                # Process conversations asynchronously
+                async def process_all():
+                    return await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Wait for all conversations to be processed
+                task_results = asyncio.run(process_all())
+                
+                # Process results
+                for i, (result, conv) in enumerate(zip(task_results, filtered_conversations)):
+                    if isinstance(result, Exception):
+                        results.append({
+                            'conversation_id': conv.get('conversation_id', ''),
+                            'conversation': conv.get('content_xml_view', ''),
+                            'unique_skills': conv.get('unique_skills', ''),
+                            'llm_output': f'Error: {str(result)}'
+                        })
+                    elif isinstance(result, dict):
+                        # Check if conversation should be skipped
+                        if result.get('skip_conversation', False):
+                            continue  # Skip adding to results
+                        
+                        results.append({
+                            'conversation_id': conv.get('conversation_id', ''),
+                            'conversation': conv.get('content_xml_view', ''),
+                            'unique_skills': conv.get('unique_skills', ''),
+                            'llm_output': result.get('llm_output', '')
+                        })
+                    else:
+                        results.append({
+                            'conversation_id': conv.get('conversation_id', ''),
+                            'conversation': conv.get('content_xml_view', ''),
+                            'unique_skills': conv.get('unique_skills', ''),
+                            'llm_output': str(result)
+                        })
+                    
+                    if (i + 1) % 100 == 0:
+                        print(f"⚡ Processed {i + 1}/{len(task_results)} conversations...")
+                
+                # Save outputs
+                output_file = save_llm_outputs(results, department, "loss_of_interest", target_date=target_date)
+                
+                # Display token usage
+                print(processor.get_token_summary(department))
+                print(f"✅ Completed {department}")
+                
+                # Print skill distribution summary
+                print(f"\n📊 Skill Distribution Summary:")
+                skill_counts = {}
+                for result in results:
+                    skill = result.get('unique_skills', 'Unknown')
+                    skill_counts[skill] = skill_counts.get(skill, 0) + 1
+                
+                for skill, count in sorted(skill_counts.items(), key=lambda x: x[1], reverse=True)[:10]:
+                    print(f"   {skill}: {count} conversations")
+                
+            except Exception as e:
+                print(f"❌ Failed processing {department}: {str(e)}")
+                continue
+        
+        # Post-processing and upload
+        if with_upload:
+            print(f"\n📤 Uploading Loss of Interest results to Google Sheets...")
+            try:
+                from post_processors.upload_loss_of_interest_sheets import LossOfInterestUploader
+                uploader = LossOfInterestUploader(target_date=target_date)
+                uploader.process_all_files()
+            except Exception as e:
+                print(f"⚠️  Upload failed: {str(e)}")
+        
+        print("🎉 Loss of Interest Analysis pipeline completed successfully!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Loss of Interest Pipeline failed: {str(e)}")
+        return False
+
+def parse_date(date_str: str) -> datetime:
+    """Parse a date string in YYYY-MM-DD format"""
+    try:
+        return datetime.strptime(date_str, '%Y-%m-%d')
+    except ValueError:
+        raise ValueError(f"Invalid date format: {date_str}. Please use YYYY-MM-DD format.")
+
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(description='LLM-as-a-Judge Pipeline')
     parser.add_argument('--prompt', required=True, 
-                       choices=['sentiment_analysis', 'rule_breaking', 'ftr', 'false_promises', 'categorizing', 'policy_escalation', 'client_suspecting_ai', 'clarity_score', 'legal_alignment', 'call_request', 'threatening', 'misprescription', 'unnecessary_clinic_rec'],
+                       choices=['sentiment_analysis', 'rule_breaking', 'ftr', 'false_promises', 'categorizing', 'policy_escalation', 'client_suspecting_ai', 'clarity_score', 'legal_alignment', 'call_request', 'threatening', 'misprescription', 'unnecessary_clinic_rec', 'loss_of_interest'],
                        help='Type of analysis to run')
     parser.add_argument('--departments', default='all', 
                        help='Departments to process (comma-separated or "all")')
@@ -2357,8 +2716,20 @@ def main():
                        help='Include post-processing and upload')
     parser.add_argument('--dry-run', action='store_true',
                        help='Show what would run without executing')
+    parser.add_argument('--date', default=None,
+                       help='Target date for analysis in YYYY-MM-DD format (defaults to yesterday)')
     
     args = parser.parse_args()
+    
+    # Parse target date if provided
+    target_date = None
+    if args.date:
+        try:
+            target_date = parse_date(args.date)
+            print(f"🗓️  Using target date: {target_date.strftime('%Y-%m-%d')}")
+        except ValueError as e:
+            print(f"❌ {e}")
+            sys.exit(1)
     
     # Set default format for specific prompts if not explicitly specified
     if args.prompt in ['categorizing', 'false_promises', 'policy_escalation', 'clarity_score', 'legal_alignment', 'call_request', 'misprescription', 'unnecessary_clinic_rec'] and args.format == 'segmented':
@@ -2399,12 +2770,12 @@ def main():
     if args.prompt == 'sentiment_analysis':
         success = run_sentiment_analysis(
             args.departments, args.model, args.format, 
-            args.with_upload, args.dry_run
+            args.with_upload, args.dry_run, target_date
         )
     elif args.prompt == 'rule_breaking':
         success = run_rule_breaking(
             args.departments, args.model, args.format,
-            args.with_upload, args.dry_run
+            args.with_upload, args.dry_run, target_date
         )
     elif args.prompt == 'ftr':
         success = run_ftr_analysis(
@@ -2424,7 +2795,7 @@ def main():
     elif args.prompt == 'policy_escalation':
         success = run_policy_escalation_analysis(
             args.departments, args.model, args.format,
-            args.with_upload, args.dry_run
+            args.with_upload, args.dry_run, target_date
         )
     elif args.prompt == 'client_suspecting_ai':
         success = run_client_suspecting_ai_analysis(
@@ -2460,6 +2831,11 @@ def main():
         success = run_unnecessary_clinic_rec_analysis(
             args.departments, args.model, args.format,
             args.with_upload, args.dry_run
+        )
+    elif args.prompt == 'loss_of_interest':
+        success = run_loss_of_interest(
+            args.departments, args.model, args.format,
+            args.with_upload, args.dry_run, target_date
         )
     else:
         print(f"❌ Unknown prompt type: {args.prompt}")

@@ -19,11 +19,31 @@ class FTRUploader:
         self.service = None
         self.setup_sheets_api()
         
-        # Main FTR sheet ID
-        self.ftr_sheet_id = '1_20GZcWM5jLCNYkE8v2_CLxi7vTUvR3IRakWKcWZmfA'
+        # Department FTR sheet IDs - one sheet per department
+        self.department_ftr_sheets = {
+            'doctors': '19EppEaiNO_9rb4HJpLEQOWvy7dB52INzIJxUEzOqqGQ',
+            'delighters': '1x5gOsmg7nJfuKSxuJgGDSVC5x6Hyfse-oL-s62-WZ8k',
+            'cc_sales': '16c_wgKVSwQu8L8kTBhid1nHbYK24PJOQFWOZaxPyOFg',
+            'cc_resolvers': '1MMBq3OLlWnnuVGoYoSl6YtHC_zu-599OtswQpxCjrbQ',
+            'filipina': '1akUETcjIoP-MsPHW9xad3Nbe67ECa7dzSj3usynZ_Ww',
+            'african': '1SF9_6ucjNT3rxRyST-s1d-FtyePFMLRPC5vzx94lFoY',
+            'ethiopian': '1SpVkmEQDnXyM0KtmUV0vyYfADBiJwowVdg6LdXzUiRI',
+            'mv_resolvers': '1_20GZcWM5jLCNYkE8v2_CLxi7vTUvR3IRakWKcWZmfA',
+            'mv_sales': '1rSJRPTOPUXKNkXNFXKy-W7SW0mKCxiybgPnpa6p7LA8'
+        }
         
-        # Snapshot sheet ID (where we update FTR percentage)
-        self.snapshot_sheet_id = '1XkVcHlkh8fEp7mmBD1Zkavdp2blBLwSABT1dE_sOf74'
+        # Department snapshot sheet IDs (for updating FTR percentages)
+        self.department_snapshot_sheets = {
+            'doctors': '1STHimb0IJ077iuBtTOwsa-GD8jStjU3SiBW7yBWom-E',
+            'delighters': '1PV0ZmobUYKHGZvHC7IfJ1t6HrJMTFi6YRbpISCouIfQ',
+            'cc_sales': '1te1fbAXhURIUO0EzQ2Mrorv3a6GDtEVM_5np9TO775o',
+            'cc_resolvers': '1QdmaTc5F2VUJ0Yu0kNF9d6ETnkMOlOgi18P7XlBSyHg',
+            'filipina': '1E5wHZKSDXQZlHIb3sV4ZWqIxvboLduzUEU0eupK7tys',
+            'african': '1__KlrVjcpR8RoYfTYMYZ_EgddUSXMhK3bJO0fTGwDig',
+            'ethiopian': '1ENzdgiwUEtBSb5sHZJWs5aG8g2H62Low8doaDZf8s90',
+            'mv_resolvers': '1XkVcHlkh8fEp7mmBD1Zkavdp2blBLwSABT1dE_sOf74',
+            'mv_sales': '1agrl9hlBhemXkiojuWKbqiMHKUzxGgos4JSkXxw7NAk'
+        }
 
     def setup_sheets_api(self):
         """Setup Google Sheets API authentication"""
@@ -258,35 +278,91 @@ class FTRUploader:
             print(f"❌ Error updating cell: {str(e)}")
             return False
 
-    def update_snapshot_sheet(self, ftr_percentage):
-        """Update the snapshot sheet with FTR percentage"""
-        print(f"\n📊 Updating snapshot sheet with FTR: {ftr_percentage:.1f}%")
+    def update_snapshot_sheet(self, ftr_percentage, dept_key):
+        """Update the department's snapshot sheet with FTR percentage"""
+        if dept_key not in self.department_snapshot_sheets:
+            print(f"❌ No snapshot sheet configured for department: {dept_key}")
+            return False
+            
+        snapshot_sheet_id = self.department_snapshot_sheets[dept_key]
+        print(f"\n📊 Updating {dept_key} snapshot sheet with FTR: {ftr_percentage:.1f}%")
         
         # Find yesterday's date in yyyy-mm-dd format (FTR analysis is for yesterday's data)
         yesterday_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         
         # Find the date row
-        date_row, sheet_name = self.find_date_row(self.snapshot_sheet_id, yesterday_date)
+        date_row, sheet_name = self.find_date_row(snapshot_sheet_id, yesterday_date)
         if not date_row:
-            print(f"❌ Could not find date {yesterday_date} in snapshot sheet")
+            print(f"❌ Could not find date {yesterday_date} in {dept_key} snapshot sheet")
             return False
         
-        # Find FTR column
-        ftr_col, sheet_name = self.find_column_by_name(self.snapshot_sheet_id, 'FTR', sheet_name)
+        # Find FTR column or fallback to "First Time resolution on actionable chats"
+        ftr_col, sheet_name = self.find_column_by_name(snapshot_sheet_id, 'FTR', sheet_name)
         if not ftr_col:
-            print("⚠️  FTR column not found in snapshot sheet")
-            print("💡 Please add an 'FTR' column to the snapshot sheet manually")
-            print("💡 The FTR column should be added to the header row in the 'Data' sheet")
-            return False
+            print(f"⚠️  'FTR' column not found in {dept_key} snapshot sheet, trying fallback column name...")
+            ftr_col, sheet_name = self.find_column_by_name(snapshot_sheet_id, 'First Time resolution on actionable chats', sheet_name)
+            if ftr_col:
+                print(f"✅ Found fallback column 'First Time resolution on actionable chats' in {dept_key} snapshot sheet")
+            else:
+                print(f"❌ Neither 'FTR' nor 'First Time resolution on actionable chats' column found in {dept_key} snapshot sheet")
+                print(f"💡 Please add one of these columns to the {dept_key} snapshot sheet manually")
+                print(f"💡 The column should be added to the header row in the 'Data' sheet")
+                return False
         
         # Update the cell with percentage
         ftr_value = f"{ftr_percentage:.1f}%"
-        success = self.update_cell_value(self.snapshot_sheet_id, sheet_name, date_row, ftr_col, ftr_value)
+        success = self.update_cell_value(snapshot_sheet_id, sheet_name, date_row, ftr_col, ftr_value)
         
         if success:
-            print(f"✅ Successfully updated snapshot sheet with FTR: {ftr_value}")
+            print(f"✅ Successfully updated {dept_key} snapshot sheet with FTR: {ftr_value}")
         
         return success
+
+    def extract_department_from_filename(self, filename):
+        """Extract department key from filename"""
+        # Remove file extension and split by underscore
+        parts = filename.replace('.csv', '').split('_')
+        
+        # Department name mapping
+        dept_mapping = {
+            'doctors': 'doctors',
+            'delighters': 'delighters',
+            'cc': {
+                'sales': 'cc_sales',
+                'resolvers': 'cc_resolvers'
+            },
+            'mv': {
+                'sales': 'mv_sales',
+                'resolvers': 'mv_resolvers'
+            },
+            'filipina': 'filipina',
+            'african': 'african',
+            'ethiopian': 'ethiopian'
+        }
+        
+        # Try to match department from filename
+        filename_lower = filename.lower()
+        
+        if 'doctors' in filename_lower:
+            return 'doctors'
+        elif 'delighters' in filename_lower:
+            return 'delighters'
+        elif 'cc_sales' in filename_lower or ('cc' in filename_lower and 'sales' in filename_lower):
+            return 'cc_sales'
+        elif 'cc_resolvers' in filename_lower or ('cc' in filename_lower and 'resolvers' in filename_lower):
+            return 'cc_resolvers'
+        elif 'mv_sales' in filename_lower or ('mv' in filename_lower and 'sales' in filename_lower):
+            return 'mv_sales'
+        elif 'mv_resolvers' in filename_lower or ('mv' in filename_lower and 'resolvers' in filename_lower):
+            return 'mv_resolvers'
+        elif 'filipina' in filename_lower:
+            return 'filipina'
+        elif 'african' in filename_lower:
+            return 'african'
+        elif 'ethiopian' in filename_lower:
+            return 'ethiopian'
+        
+        return None
 
     def process_all_files(self):
         """Process all FTR files and upload to Google Sheets"""
@@ -309,37 +385,55 @@ class FTRUploader:
             return False
         
         # Find combined FTR files
-        ftr_files = []
+        success_count = 0
+        processed_departments = []
+        
         for filename in os.listdir(ftr_dir):
             if filename.endswith('_FTR_Combined.csv'):
                 filepath = os.path.join(ftr_dir, filename)
-                ftr_files.append(filepath)
+                
+                # Extract department from filename
+                dept_key = self.extract_department_from_filename(filename)
+                if not dept_key:
+                    print(f"⚠️  Could not determine department from filename: {filename}")
+                    continue
+                
+                if dept_key not in self.department_ftr_sheets:
+                    print(f"⚠️  No FTR sheet configured for department: {dept_key}")
+                    continue
+                
+                ftr_sheet_id = self.department_ftr_sheets[dept_key]
+                
+                # Skip if placeholder ID
+                if 'REPLACE_WITH' in ftr_sheet_id:
+                    print(f"⚠️  FTR sheet ID not configured for {dept_key}. Please create the sheet and update the ID.")
+                    continue
+                
+                print(f"\n📁 Processing {dept_key} FTR file: {filename}")
+                
+                # Extract FTR percentage for snapshot update
+                ftr_percentage = self.extract_ftr_percentage(filepath)
+                
+                # Create new sheet tab for this date
+                if self.create_new_sheet(ftr_sheet_id, sheet_name):
+                    # Upload data
+                    if self.upload_data_to_sheet(filepath, ftr_sheet_id, sheet_name):
+                        print(f"✅ Successfully uploaded {dept_key} FTR data")
+                        print(f"📋 Sheet URL: https://docs.google.com/spreadsheets/d/{ftr_sheet_id}")
+                        
+                        # Update snapshot sheet with FTR percentage
+                        if ftr_percentage is not None:
+                            self.update_snapshot_sheet(ftr_percentage, dept_key)
+                        
+                        success_count += 1
+                        processed_departments.append(dept_key)
         
-        if not ftr_files:
-            print(f"❌ No FTR combined files found in {ftr_dir}")
+        if success_count > 0:
+            print(f"\n✅ Successfully processed {success_count} department(s): {', '.join(processed_departments)}")
+            return True
+        else:
+            print(f"\n❌ No FTR files were successfully processed")
             return False
-        
-        # For now, process the first FTR file found (you can modify this to combine multiple departments)
-        filepath = ftr_files[0]
-        print(f"📁 Processing FTR file: {os.path.basename(filepath)}")
-        
-        # Extract FTR percentage for snapshot update
-        ftr_percentage = self.extract_ftr_percentage(filepath)
-        
-        # Create new sheet
-        if self.create_new_sheet(self.ftr_sheet_id, sheet_name):
-            # Upload data
-            if self.upload_data_to_sheet(filepath, self.ftr_sheet_id, sheet_name):
-                print(f"✅ Successfully uploaded FTR data")
-                print(f"📋 Sheet URL: https://docs.google.com/spreadsheets/d/{self.ftr_sheet_id}")
-                
-                # Update snapshot sheet with FTR percentage
-                if ftr_percentage is not None:
-                    self.update_snapshot_sheet(ftr_percentage)
-                
-                return True
-        
-        return False
 
 
 def main():

@@ -1,6 +1,7 @@
 import pandas as pd
 import json
 import os
+import re
 from datetime import datetime, timedelta
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
@@ -16,8 +17,18 @@ class ClarityScoreProcessor:
         self.clarity_score_dir = f"outputs/clarity_score/{yesterday.strftime('%Y-%m-%d')}"
         os.makedirs(self.clarity_score_dir, exist_ok=True)
         
-        # Snapshot sheet for metric updates
-        self.snapshot_sheet_id = '1XkVcHlkh8fEp7mmBD1Zkavdp2blBLwSABT1dE_sOf74'
+        # Department snapshot sheet IDs for metric updates
+        self.department_sheets = {
+            'doctors': '1STHimb0IJ077iuBtTOwsa-GD8jStjU3SiBW7yBWom-E',
+            'delighters': '1PV0ZmobUYKHGZvHC7IfJ1t6HrJMTFi6YRbpISCouIfQ',
+            'cc_sales': '1te1fbAXhURIUO0EzQ2Mrorv3a6GDtEVM_5np9TO775o',
+            'cc_resolvers': '1QdmaTc5F2VUJ0Yu0kNF9d6ETnkMOlOgi18P7XlBSyHg',
+            'filipina': '1E5wHZKSDXQZlHIb3sV4ZWqIxvboLduzUEU0eupK7tys',
+            'african': '1__KlrVjcpR8RoYfTYMYZ_EgddUSXMhK3bJO0fTGwDig',
+            'ethiopian': '1ENzdgiwUEtBSb5sHZJWs5aG8g2H62Low8doaDZf8s90',
+            'mv_resolvers': '1XkVcHlkh8fEp7mmBD1Zkavdp2blBLwSABT1dE_sOf74',
+            'mv_sales': '1agrl9hlBhemXkiojuWKbqiMHKUzxGgos4JSkXxw7NAk'
+        }
         
     def setup_sheets_api(self):
         """Setup Google Sheets API connection"""
@@ -44,7 +55,10 @@ class ClarityScoreProcessor:
             if filename.startswith('clarity_score_') and filename.endswith('.csv'):
                 filepath = os.path.join(llm_outputs_dir, filename)
                 # Extract department key from filename
-                dept_key = filename.replace('clarity_score_', '').replace('.csv', '').replace('_07_29', '').replace('_07_28', '').replace('_07_27', '')
+                # Remove prefix and extension
+                dept_key = filename.replace('clarity_score_', '').replace('.csv', '')
+                # Remove date suffixes (format: _MM_DD or_08_05)
+                dept_key = re.sub(r'_\d{2}_\d{2}$', '', dept_key)
                 files_found.append((filepath, dept_key, filename))
                 print(f"📁 Found clarity score file: {filename}")
         
@@ -238,27 +252,33 @@ class ClarityScoreProcessor:
             print(f"❌ Error updating cell {sheet_name}!{col_letter}{row}: {str(e)}")
             return False
     
-    def update_snapshot_sheet(self, percentage):
-        """Update clarification percentage in snapshot sheet for yesterday's date"""
+    def update_snapshot_sheet(self, percentage, dept_key):
+        """Update clarification percentage in department snapshot sheet for yesterday's date"""
         try:
+            # Get department sheet ID
+            if dept_key not in self.department_sheets:
+                print(f"❌ No snapshot sheet configured for department: {dept_key}")
+                return False
+                
+            sheet_id = self.department_sheets[dept_key]
             yesterday_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
             
             # Find the "Clarity Score" column
-            clarity_col = self.find_column_by_name(self.snapshot_sheet_id, "Clarity Score")
+            clarity_col = self.find_column_by_name(sheet_id, "Clarity Score")
             if not clarity_col:
-                print("⚠️  Could not find 'Clarity Score' column in snapshot sheet")
-                print("   Please manually add a 'Clarity Score' column to the snapshot sheet")
+                print(f"⚠️  Could not find 'Clarity Score' column in {dept_key} snapshot sheet")
+                print(f"   Please manually add a 'Clarity Score' column to the {dept_key} snapshot sheet")
                 return False
             
             # Find yesterday's date row
-            date_row = self.find_date_row(self.snapshot_sheet_id, yesterday_date)
+            date_row = self.find_date_row(sheet_id, yesterday_date)
             if not date_row:
-                print(f"⚠️  Could not find date {yesterday_date} in snapshot sheet")
+                print(f"⚠️  Could not find date {yesterday_date} in {dept_key} snapshot sheet")
                 return False
             
             # Update the cell
             success = self.update_cell_value(
-                self.snapshot_sheet_id, 
+                sheet_id, 
                 'Data', 
                 date_row, 
                 clarity_col, 
@@ -266,12 +286,12 @@ class ClarityScoreProcessor:
             )
             
             if success:
-                print(f"📊 Updated snapshot sheet with clarification percentage: {percentage}% for {yesterday_date}")
+                print(f"📊 Updated {dept_key} snapshot sheet with clarification percentage: {percentage}% for {yesterday_date}")
             
             return success
             
         except Exception as e:
-            print(f"❌ Error updating snapshot sheet: {str(e)}")
+            print(f"❌ Error updating {dept_key} snapshot sheet: {str(e)}")
             return False
     
     def process_all_files(self):
@@ -284,10 +304,8 @@ class ClarityScoreProcessor:
         
         print(f"📊 Processing {len(files)} clarity score files...")
         
-        total_conversations = 0
-        total_messages = 0
-        total_clarifications = 0
         processed_count = 0
+        success_count = 0
         
         for filepath, dept_key, filename in files:
             try:
@@ -304,52 +322,42 @@ class ClarityScoreProcessor:
                     self.save_summary_report(clarification_percentage, dept_name)
                     processed_count += 1
                     
-                    # Read the file to get conversation counts for overall stats
-                    df = pd.read_csv(filepath)
-                    dept_conversations = len(df)
-                    
-                    dept_messages = 0
-                    dept_clarifications = 0
-                    
-                    for _, row in df.iterrows():
-                        parsed_json = self.safe_json_parse(row['llm_output'])
-                        if parsed_json and isinstance(parsed_json, dict):
-                            if 'Total' in parsed_json and 'ClarificationMessages' in parsed_json:
-                                try:
-                                    total = int(parsed_json['Total'])
-                                    clarifications = int(parsed_json['ClarificationMessages'])
-                                    if total > 0:
-                                        dept_messages += total
-                                        dept_clarifications += clarifications
-                                except (ValueError, TypeError):
-                                    continue
-                    
-                    total_conversations += dept_conversations
-                    total_messages += dept_messages
-                    total_clarifications += dept_clarifications
+
                     
                     print(f"✅ {dept_name}: {clarification_percentage}% clarification score")
+                    
+                    # Update department snapshot sheet
+                    if self.service and dept_key in self.department_sheets:
+                        update_success = self.update_snapshot_sheet(clarification_percentage, dept_key)
+                        if update_success:
+                            success_count += 1
+                            print(f"✅ {dept_name}: {clarification_percentage}% clarification score (snapshot updated)")
+                        else:
+                            print(f"⚠️  {dept_name}: {clarification_percentage}% clarification score (failed to update snapshot)")
+                    else:
+                        print(f"⚠️  {dept_name}: {clarification_percentage}% clarification score (no snapshot sheet configured)")
+                        success_count += 1
                     
             except Exception as e:
                 print(f"❌ Error processing {filename}: {str(e)}")
                 continue
         
-        # Calculate overall clarification percentage and update snapshot
-        if total_messages > 0:
-            overall_clarification_percentage = (total_clarifications / total_messages) * 100
-            overall_clarification_percentage = round(overall_clarification_percentage, 1)
-            
-            print(f"\n📈 Overall Clarity Score Analysis:")
-            print(f"   Processed departments: {processed_count}")
-            print(f"   Total conversations: {total_conversations}")
-            print(f"   Total customer messages: {total_messages}")
-            print(f"   Total clarification requests: {total_clarifications}")
-            print(f"   Overall clarification percentage: {overall_clarification_percentage}%")
-            
-            # Update snapshot sheet with overall score
-            self.update_snapshot_sheet(overall_clarification_percentage)
+        # Summary of processing
+        if processed_count > 0:
+            print(f"\n📈 Clarity Score Analysis completed!")
+            print(f"   Processed {processed_count} department(s)")
         else:
             print("❌ No valid clarity data found across all departments")
         
         print(f"\n🎉 Clarification percentage analysis completed!")
-        print(f"   Successfully processed: {processed_count}/{len(files)} files") 
+        print(f"   Successfully processed: {processed_count}/{len(files)} files")
+
+
+def main():
+    """Main function for standalone execution"""
+    processor = ClarityScoreProcessor()
+    processor.process_all_files()
+
+
+if __name__ == "__main__":
+    main() 

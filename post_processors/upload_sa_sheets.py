@@ -12,10 +12,11 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
 class SaprompUploader:
-    def __init__(self, credentials_path='credentials.json'):
+    def __init__(self, credentials_path='credentials.json', target_date=None):
         """Initialize SA Prompt Uploader with Google Sheets integration"""
         self.credentials_path = credentials_path
         self.service = None
+        self.target_date = target_date if target_date else datetime.now() - timedelta(days=1)
         self.setup_sheets_api()
         
         # Department sheet IDs as provided by user
@@ -64,10 +65,9 @@ class SaprompUploader:
             return False
 
     def find_saprompt_files(self):
-        """Find all saprompt files from yesterday's date"""
-        # Look in yesterday's date subfolder
-        yesterday = datetime.now() - timedelta(days=1)
-        date_folder = yesterday.strftime('%Y-%m-%d')
+        """Find all saprompt files from the target date"""
+        # Look in target date's subfolder
+        date_folder = self.target_date.strftime('%Y-%m-%d')
         output_dir = f"outputs/LLM_outputs/{date_folder}"
         saprompt_files = []
         
@@ -75,9 +75,8 @@ class SaprompUploader:
             print(f"❌ Directory not found: {output_dir}")
             return []
         
-        # Get yesterday's date in mm_dd format
-        yesterday = datetime.now() - timedelta(days=1)
-        target_date = yesterday.strftime('%m_%d')
+        # Get target date in mm_dd format
+        target_date = self.target_date.strftime('%m_%d')
         
         print(f"🔍 Looking for saprompt files with date: {target_date}")
         

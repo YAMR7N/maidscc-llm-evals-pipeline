@@ -16,8 +16,18 @@ class LegalAlignmentProcessor:
         self.legal_alignment_dir = f"outputs/legal_alignment/{yesterday.strftime('%Y-%m-%d')}"
         os.makedirs(self.legal_alignment_dir, exist_ok=True)
         
-        # Snapshot sheet for metric tracking
-        self.snapshot_sheet_id = '1XkVcHlkh8fEp7mmBD1Zkavdp2blBLwSABT1dE_sOf74'
+        # Department snapshot sheets for metric tracking
+        self.department_sheets = {
+            'doctors': '1STHimb0IJ077iuBtTOwsa-GD8jStjU3SiBW7yBWom-E',
+            'delighters': '1PV0ZmobUYKHGZvHC7IfJ1t6HrJMTFi6YRbpISCouIfQ',
+            'cc_sales': '1te1fbAXhURIUO0EzQ2Mrorv3a6GDtEVM_5np9TO775o',
+            'cc_resolvers': '1QdmaTc5F2VUJ0Yu0kNF9d6ETnkMOlOgi18P7XlBSyHg',
+            'filipina': '1E5wHZKSDXQZlHIb3sV4ZWqIxvboLduzUEU0eupK7tys',
+            'african': '1__KlrVjcpR8RoYfTYMYZ_EgddUSXMhK3bJO0fTGwDig',
+            'ethiopian': '1ENzdgiwUEtBSb5sHZJWs5aG8g2H62Low8doaDZf8s90',
+            'mv_resolvers': '1XkVcHlkh8fEp7mmBD1Zkavdp2blBLwSABT1dE_sOf74',
+            'mv_sales': '1agrl9hlBhemXkiojuWKbqiMHKUzxGgos4JSkXxw7NAk'
+        }
     
     def setup_sheets_api(self):
         """Initialize Google Sheets API service"""
@@ -95,10 +105,8 @@ class LegalAlignmentProcessor:
                 print("⚠️ No valid conversations found for legal alignment analysis")
                 return 0.0, 0.0
             
-            # Metric 1: (EscalationOutcome = Escalated / LegalityConcerned = True) * 100
-            escalation_rate = 0.0
-            if legal_concerns_count > 0:
-                escalation_rate = (escalated_count / legal_concerns_count) * 100
+            # Metric 1: (EscalationOutcome = Escalated / Total Output) * 100
+            escalation_rate = (escalated_count / total_conversations) * 100
             
             # Metric 2: (LegalityConcerned = true / Total Output) * 100
             legal_concerns_percentage = (legal_concerns_count / total_conversations) * 100
@@ -107,10 +115,10 @@ class LegalAlignmentProcessor:
             print(f"   Total conversations analyzed: {total_conversations}")
             print(f"   Legal concerns identified: {legal_concerns_count}")
             print(f"   Cases escalated: {escalated_count}")
-            print(f"   Escalation rate: {escalation_rate:.1f}% (escalated/legal concerns)")
-            print(f"   Legal concerns percentage: {legal_concerns_percentage:.1f}% (legal concerns/total)")
+            print(f"   Escalation rate: {escalation_rate:.2f}% (escalated/total)")
+            print(f"   Legal concerns percentage: {legal_concerns_percentage:.2f}% (legal concerns/total)")
             
-            return round(escalation_rate, 1), round(legal_concerns_percentage, 1)
+            return round(escalation_rate, 2), round(legal_concerns_percentage, 2)
             
         except Exception as e:
             print(f"❌ Error calculating legal metrics: {str(e)}")
@@ -147,13 +155,13 @@ class LegalAlignmentProcessor:
                 break
         return result
 
-    def find_column_by_name(self, column_name, sheet_name='Data'):
+    def find_column_by_name(self, column_name, sheet_id, sheet_name='Data'):
         """Find column letter by searching for exact column name"""
         try:
             # Get the first row to search for column headers
             range_name = f"{sheet_name}!1:1"
             result = self.service.spreadsheets().values().get(
-                spreadsheetId=self.snapshot_sheet_id,
+                spreadsheetId=sheet_id,
                 range=range_name
             ).execute()
             
@@ -191,13 +199,13 @@ class LegalAlignmentProcessor:
             print(f"❌ Error finding column: {str(e)}")
             return None
     
-    def find_date_row(self, target_date, sheet_name='Data'):
+    def find_date_row(self, target_date, sheet_id, sheet_name='Data'):
         """Find the row number for a specific date"""
         try:
             # Get column A (dates) to search
             range_name = f"{sheet_name}!A:A"
             result = self.service.spreadsheets().values().get(
-                spreadsheetId=self.snapshot_sheet_id,
+                spreadsheetId=sheet_id,
                 range=range_name
             ).execute()
             
@@ -222,7 +230,7 @@ class LegalAlignmentProcessor:
             print(f"❌ Error finding date row: {str(e)}")
             return None
     
-    def update_cell_value(self, range_name, value):
+    def update_cell_value(self, range_name, value, sheet_id):
         """Update a specific cell with a value"""
         try:
             body = {
@@ -230,7 +238,7 @@ class LegalAlignmentProcessor:
             }
             
             result = self.service.spreadsheets().values().update(
-                spreadsheetId=self.snapshot_sheet_id,
+                spreadsheetId=sheet_id,
                 range=range_name,
                 valueInputOption='RAW',
                 body=body
@@ -243,17 +251,23 @@ class LegalAlignmentProcessor:
             print(f"❌ Error updating cell {range_name}: {str(e)}")
             return False
     
-    def update_snapshot_sheet(self, escalation_rate, legal_concerns_percentage):
-        """Update both legal alignment metrics in snapshot sheet for yesterday's date"""
+    def update_snapshot_sheet(self, escalation_rate, legal_concerns_percentage, dept_key):
+        """Update both legal alignment metrics in department snapshot sheet for yesterday's date"""
         try:
             if not self.service:
                 print("❌ Google Sheets API not available")
                 return False
             
+            # Get department sheet ID
+            if dept_key not in self.department_sheets:
+                print(f"❌ No snapshot sheet configured for department: {dept_key}")
+                return False
+                
+            sheet_id = self.department_sheets[dept_key]
             yesterday = datetime.now() - timedelta(days=1)
             
             # Find the row for yesterday's date first
-            date_row = self.find_date_row(yesterday)
+            date_row = self.find_date_row(yesterday, sheet_id)
             if not date_row:
                 print(f"⚠️ Could not find date {yesterday.strftime('%Y-%m-%d')} in snapshot sheet")
                 return False
@@ -261,10 +275,10 @@ class LegalAlignmentProcessor:
             success_count = 0
             
             # Update Escalation Outcome column
-            escalation_col = self.find_column_by_name("Escalation Outcome")
+            escalation_col = self.find_column_by_name("Escalation Outcome", sheet_id)
             if escalation_col:
                 range_name = f"Data!{escalation_col}{date_row}"
-                if self.update_cell_value(range_name, f"{escalation_rate}%"):
+                if self.update_cell_value(range_name, f"{escalation_rate}%", sheet_id):
                     print(f"📊 Updated Escalation Outcome: {escalation_rate}%")
                     success_count += 1
                 else:
@@ -273,10 +287,10 @@ class LegalAlignmentProcessor:
                 print("⚠️ Column 'Escalation Outcome' not found in snapshot sheet")
             
             # Update Clients Questioning Legalties column
-            legal_concerns_col = self.find_column_by_name("Clients Questioning Legalties")
+            legal_concerns_col = self.find_column_by_name("Clients Questioning Legalties", sheet_id)
             if legal_concerns_col:
                 range_name = f"Data!{legal_concerns_col}{date_row}"
-                if self.update_cell_value(range_name, f"{legal_concerns_percentage}%"):
+                if self.update_cell_value(range_name, f"{legal_concerns_percentage}%", sheet_id):
                     print(f"📊 Updated Clients Questioning Legalties: {legal_concerns_percentage}%")
                     success_count += 1
                 else:
@@ -327,8 +341,6 @@ class LegalAlignmentProcessor:
                 print("ℹ️ No legal alignment files found to process")
                 return
             
-            total_escalation_rate = 0
-            total_legal_concerns_percentage = 0
             successful_files = 0
             
             for filepath, dept_key, filename in files:
@@ -354,26 +366,37 @@ class LegalAlignmentProcessor:
                     # Save individual summary
                     self.save_summary_report(escalation_rate, legal_concerns_percentage, dept_name)
                     
-                    total_escalation_rate += escalation_rate
-                    total_legal_concerns_percentage += legal_concerns_percentage
-                    successful_files += 1
-                    
-                    print(f"✅ {dept_name}: {escalation_rate}% escalation rate, {legal_concerns_percentage}% legal concerns")
+                    # Update department snapshot sheet
+                    if self.service and dept_key in self.department_sheets:
+                        update_success = self.update_snapshot_sheet(escalation_rate, legal_concerns_percentage, dept_key)
+                        if update_success:
+                            successful_files += 1
+                            print(f"✅ {dept_name}: {escalation_rate:.2f}% escalation rate, {legal_concerns_percentage:.2f}% legal concerns (snapshot updated)")
+                        else:
+                            print(f"⚠️  {dept_name}: {escalation_rate:.2f}% escalation rate, {legal_concerns_percentage:.2f}% legal concerns (failed to update snapshot)")
+                    else:
+                        print(f"⚠️  {dept_name}: {escalation_rate:.2f}% escalation rate, {legal_concerns_percentage:.2f}% legal concerns (no snapshot sheet configured)")
+                        successful_files += 1
                 
                 else:
                     print(f"❌ Failed to process {filename}")
             
-            # Update snapshot sheet with average metrics if we have data
+            # Summary of processing
             if successful_files > 0:
-                avg_escalation_rate = total_escalation_rate / successful_files
-                avg_legal_concerns_percentage = total_legal_concerns_percentage / successful_files
-                self.update_snapshot_sheet(round(avg_escalation_rate, 1), round(avg_legal_concerns_percentage, 1))
                 print(f"\n📈 Legal alignment analysis completed!")
-                print(f"   Average escalation rate: {avg_escalation_rate:.1f}%")
-                print(f"   Average legal concerns percentage: {avg_legal_concerns_percentage:.1f}%")
                 print(f"   Processed {successful_files} department(s)")
             else:
                 print("\n⚠️ No valid legal alignment data found to process")
                 
         except Exception as e:
-            print(f"❌ Error in legal alignment processing: {str(e)}") 
+            print(f"❌ Error in legal alignment processing: {str(e)}")
+
+
+def main():
+    """Main function for standalone execution"""
+    processor = LegalAlignmentProcessor()
+    processor.process_all_files()
+
+
+if __name__ == "__main__":
+    main() 

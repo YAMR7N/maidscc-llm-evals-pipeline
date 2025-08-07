@@ -351,17 +351,6 @@ class PolicyEscalationProcessor:
             print("❌ No Policy Escalation files found to process")
             return False
         
-        # Determine which department we're processing based on filenames
-        is_doctors = any('doctors' in filename.lower() for filepath, dept_key, filename in policy_escalation_files)
-        
-        # Set the appropriate snapshot sheet ID
-        if is_doctors:
-            self.snapshot_sheet_id = self.doctors_snapshot_sheet_id
-            print(f"✅ Using Doctors snapshot sheet: {self.snapshot_sheet_id}")
-        else:
-            self.snapshot_sheet_id = self.general_snapshot_sheet_id
-            print(f"✅ Using General snapshot sheet: {self.snapshot_sheet_id}")
-        
         success_count = 0
         overall_results = {}
         
@@ -400,21 +389,29 @@ class PolicyEscalationProcessor:
             print(f"\n🎉 Policy Escalation Processing Summary:")
             print(f"✅ Successfully processed: {success_count}/{len(policy_escalation_files)} departments")
             print(f"\n📊 Policy Escalation Results by Department:")
+            
+            # Process each department individually
             for dept, results in overall_results.items():
                 print(f"  {dept}:")
                 print(f"    Policy Escalation: {results['policy_escalation_percentage']:.1f}%")
                 print(f"    Total Outputs: {results['total_outputs']}")
                 print(f"    Valid Outputs: {results['valid_outputs']}")
                 print(f"    Customer Escalations: {results['customer_escalation_true_count']}")
-            
-            # Update snapshot sheet with average policy escalation percentage
-            total_percentage = sum(results['policy_escalation_percentage'] for results in overall_results.values())
-            average_percentage = total_percentage / len(overall_results)
-            self.update_snapshot_sheet(round(average_percentage, 1))
+                
+                # Determine which snapshot sheet to update for this department
+                if 'doctors' in dept.lower():
+                    self.snapshot_sheet_id = self.doctors_snapshot_sheet_id
+                    print(f"\n📊 Updating Doctors snapshot sheet for {dept}...")
+                else:
+                    self.snapshot_sheet_id = self.general_snapshot_sheet_id  
+                    print(f"\n📊 Updating General snapshot sheet for {dept}...")
+                
+                # Update snapshot sheet for THIS specific department
+                self.update_snapshot_sheet(round(results['policy_escalation_percentage'], 1))
             
             print(f"\n📈 Policy escalation analysis completed!")
-            print(f"   Average policy escalation percentage: {average_percentage:.1f}%")
             print(f"   Processed {success_count} department(s)")
+            print(f"   Each department's snapshot sheet updated with its specific percentage")
         else:
             print("\n⚠️ No valid policy escalation data found to process")
         

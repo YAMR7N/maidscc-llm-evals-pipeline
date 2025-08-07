@@ -16,8 +16,18 @@ class CallRequestProcessor:
         self.call_request_dir = f"outputs/call_request/{yesterday.strftime('%Y-%m-%d')}"
         os.makedirs(self.call_request_dir, exist_ok=True)
         
-        # Snapshot sheet for metric tracking
-        self.snapshot_sheet_id = '1XkVcHlkh8fEp7mmBD1Zkavdp2blBLwSABT1dE_sOf74'
+        # Department snapshot sheets for metric tracking
+        self.department_sheets = {
+            'doctors': '1STHimb0IJ077iuBtTOwsa-GD8jStjU3SiBW7yBWom-E',
+            'delighters': '1PV0ZmobUYKHGZvHC7IfJ1t6HrJMTFi6YRbpISCouIfQ',
+            'cc_sales': '1te1fbAXhURIUO0EzQ2Mrorv3a6GDtEVM_5np9TO775o',
+            'cc_resolvers': '1QdmaTc5F2VUJ0Yu0kNF9d6ETnkMOlOgi18P7XlBSyHg',
+            'filipina': '1E5wHZKSDXQZlHIb3sV4ZWqIxvboLduzUEU0eupK7tys',
+            'african': '1__KlrVjcpR8RoYfTYMYZ_EgddUSXMhK3bJO0fTGwDig',
+            'ethiopian': '1ENzdgiwUEtBSb5sHZJWs5aG8g2H62Low8doaDZf8s90',
+            'mv_resolvers': '1XkVcHlkh8fEp7mmBD1Zkavdp2blBLwSABT1dE_sOf74',
+            'mv_sales': '1agrl9hlBhemXkiojuWKbqiMHKUzxGgos4JSkXxw7NAk'
+        }
     
     def setup_sheets_api(self):
         """Initialize Google Sheets API service"""
@@ -101,21 +111,18 @@ class CallRequestProcessor:
             # Calculate metrics
             call_request_rate = (call_requests_count / total_conversations) * 100
             
-            # Rebuttal result: percentage of call requests that resulted in no retention (failure rate)
-            if call_requests_count > 0:
-                rebuttal_result_rate = (no_retention_count / call_requests_count) * 100
-            else:
-                rebuttal_result_rate = 0.0
+            # Rebuttal result: percentage of total conversations that resulted in no retention
+            rebuttal_result_rate = (no_retention_count / total_conversations) * 100
             
             print(f"📈 Call Request Analysis Results:")
             print(f"   Total conversations analyzed: {total_conversations}")
             print(f"   Call requests made: {call_requests_count}")
             print(f"   Successfully retained: {retained_count}")
             print(f"   Not retained: {no_retention_count}")
-            print(f"   Call request rate: {call_request_rate:.1f}%")
-            print(f"   Rebuttal result rate (no retention): {rebuttal_result_rate:.1f}%")
+            print(f"   Call request rate: {call_request_rate:.2f}%")
+            print(f"   Rebuttal result rate (no retention/total): {rebuttal_result_rate:.2f}%")
             
-            return round(call_request_rate, 1), round(rebuttal_result_rate, 1)
+            return round(call_request_rate, 2), round(rebuttal_result_rate, 2)
             
         except Exception as e:
             print(f"❌ Error calculating call request metrics: {str(e)}")
@@ -248,19 +255,26 @@ class CallRequestProcessor:
             print(f"❌ Error updating cell {range_name}: {str(e)}")
             return False
     
-    def update_snapshot_sheet(self, call_request_rate, rebuttal_result_rate):
-        """Update call request metrics in snapshot sheet for yesterday's date"""
+    def update_snapshot_sheet(self, call_request_rate, rebuttal_result_rate, dept_key):
+        """Update call request metrics in department snapshot sheet for yesterday's date"""
         try:
             if not self.service:
                 print("❌ Google Sheets API not available")
                 return False
             
+            # Get department sheet ID
+            if dept_key not in self.department_sheets:
+                print(f"❌ No snapshot sheet configured for department: {dept_key}")
+                return False
+                
+            self.snapshot_sheet_id = self.department_sheets[dept_key]
             yesterday = datetime.now() - timedelta(days=1)
             
             # Find the row for yesterday's date first
             date_row = self.find_date_row(yesterday)
             if not date_row:
-                print(f"⚠️ Could not find date {yesterday.strftime('%Y-%m-%d')} in snapshot sheet")
+                dept_name = dept_key.replace('_', ' ').title()
+                print(f"⚠️ Could not find date {yesterday.strftime('%Y-%m-%d')} in {dept_name} snapshot sheet")
                 return False
             
             success_count = 0
@@ -354,24 +368,25 @@ class CallRequestProcessor:
                     # Save individual summary
                     self.save_summary_report(call_request_rate, rebuttal_result_rate, dept_name)
                     
-                    total_call_request_rate += call_request_rate
-                    total_rebuttal_result_rate += rebuttal_result_rate
-                    successful_files += 1
-                    
-                    print(f"✅ {dept_name}: {call_request_rate}% call requests, {rebuttal_result_rate}% rebuttal result rate")
+                    # Update department snapshot sheet
+                    if self.service and dept_key in self.department_sheets:
+                        update_success = self.update_snapshot_sheet(call_request_rate, rebuttal_result_rate, dept_key)
+                        if update_success:
+                            successful_files += 1
+                            print(f"✅ {dept_name}: {call_request_rate:.2f}% call requests, {rebuttal_result_rate:.2f}% rebuttal result rate")
+                        else:
+                            print(f"⚠️  {dept_name}: Calculated rates but failed to update snapshot")
+                    else:
+                        print(f"⚠️  {dept_name}: No snapshot sheet configured for this department")
+                        print(f"✅ {dept_name}: {call_request_rate:.2f}% call requests, {rebuttal_result_rate:.2f}% rebuttal result rate")
                 
                 else:
                     print(f"❌ Failed to process {filename}")
             
-            # Update snapshot sheet with average rates if we have data
+            # Summary
             if successful_files > 0:
-                average_call_request_rate = total_call_request_rate / successful_files
-                average_rebuttal_result_rate = total_rebuttal_result_rate / successful_files
-                self.update_snapshot_sheet(round(average_call_request_rate, 1), round(average_rebuttal_result_rate, 1))
                 print(f"\n📈 Call request analysis completed!")
-                print(f"   Average call request rate: {average_call_request_rate:.1f}%")
-                print(f"   Average rebuttal result rate: {average_rebuttal_result_rate:.1f}%")
-                print(f"   Processed {successful_files} department(s)")
+                print(f"   Processed {successful_files} department(s) successfully")
             else:
                 print("\n⚠️ No valid call request data found to process")
                 

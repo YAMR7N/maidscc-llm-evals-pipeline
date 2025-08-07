@@ -23,8 +23,18 @@ class ClientSuspectingAiProcessor:
         self.client_suspecting_ai_dir = f"outputs/client_suspecting_ai/{date_folder}"
         os.makedirs(self.client_suspecting_ai_dir, exist_ok=True)
         
-        # Snapshot sheet ID
-        self.snapshot_sheet_id = '1XkVcHlkh8fEp7mmBD1Zkavdp2blBLwSABT1dE_sOf74'
+        # Snapshot sheet IDs for each department
+        self.department_sheets = {
+            'doctors': '1STHimb0IJ077iuBtTOwsa-GD8jStjU3SiBW7yBWom-E',
+            'delighters': '1PV0ZmobUYKHGZvHC7IfJ1t6HrJMTFi6YRbpISCouIfQ',
+            'cc_sales': '1te1fbAXhURIUO0EzQ2Mrorv3a6GDtEVM_5np9TO775o',
+            'cc_resolvers': '1QdmaTc5F2VUJ0Yu0kNF9d6ETnkMOlOgi18P7XlBSyHg',
+            'filipina': '1E5wHZKSDXQZlHIb3sV4ZWqIxvboLduzUEU0eupK7tys',
+            'african': '1__KlrVjcpR8RoYfTYMYZ_EgddUSXMhK3bJO0fTGwDig',
+            'ethiopian': '1ENzdgiwUEtBSb5sHZJWs5aG8g2H62Low8doaDZf8s90',
+            'mv_resolvers': '1XkVcHlkh8fEp7mmBD1Zkavdp2blBLwSABT1dE_sOf74',
+            'mv_sales': '1agrl9hlBhemXkiojuWKbqiMHKUzxGgos4JSkXxw7NAk'
+        }
 
     def setup_sheets_api(self):
         """Setup Google Sheets API authentication"""
@@ -243,30 +253,38 @@ class ClientSuspectingAiProcessor:
             print(f"❌ Error updating cell: {str(e)}")
             return False
 
-    def update_snapshot_sheet(self, percentage):
-        """Update the snapshot sheet with Client Suspecting AI percentage"""
-        print(f"\n📊 Updating snapshot sheet with Client Suspecting AI: {percentage:.1f}%")
+    def update_snapshot_sheet(self, percentage, dept_key):
+        """Update the department snapshot sheet with Client Suspecting AI percentage"""
+        dept_name = self.convert_dept_key_to_name(dept_key)
+        print(f"\n📊 Updating {dept_name} snapshot sheet with Client Suspecting AI: {percentage:.1f}%")
+        
+        # Get department-specific sheet ID
+        if dept_key not in self.department_sheets:
+            print(f"❌ No snapshot sheet configured for department: {dept_key}")
+            return False
+        
+        dept_sheet_id = self.department_sheets[dept_key]
         
         # Find yesterday's date in yyyy-mm-dd format
         yesterday_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         
         # Find the date row
-        date_row, sheet_name = self.find_date_row(self.snapshot_sheet_id, yesterday_date)
+        date_row, sheet_name = self.find_date_row(dept_sheet_id, yesterday_date)
         if not date_row:
             print(f"❌ Could not find date {yesterday_date} in snapshot sheet")
             return False
         
         # Find Client Suspecting AI column
-        client_suspecting_ai_col, sheet_name = self.find_column_by_name(self.snapshot_sheet_id, 'Clients Suspecting AI', sheet_name)
+        client_suspecting_ai_col, sheet_name = self.find_column_by_name(dept_sheet_id, 'Clients Suspecting AI', sheet_name)
         if not client_suspecting_ai_col:
-            print("⚠️  Client Suspecting AI column not found in snapshot sheet")
-            print("💡 Please add a 'Client Suspecting AI' column to the snapshot sheet manually")
+            print(f"⚠️  Client Suspecting AI column not found in {dept_name} snapshot sheet")
+            print(f"💡 Please add a 'Client Suspecting AI' column to the {dept_name} snapshot sheet manually")
             print("💡 The column should be added to the header row in the 'Data' sheet")
             return False
         
         # Update the cell with percentage
         client_suspecting_ai_value = f"{percentage:.1f}%"
-        success = self.update_cell_value(self.snapshot_sheet_id, sheet_name, date_row, client_suspecting_ai_col, client_suspecting_ai_value)
+        success = self.update_cell_value(dept_sheet_id, sheet_name, date_row, client_suspecting_ai_col, client_suspecting_ai_value)
         
         if success:
             print(f"✅ Successfully updated snapshot sheet with Client Suspecting AI: {client_suspecting_ai_value}")
@@ -286,9 +304,8 @@ class ClientSuspectingAiProcessor:
         
         print(f"📁 Found {len(client_suspecting_ai_files)} files to process")
         
-        # Calculate overall percentage across all departments
-        total_conversations = 0
-        total_suspected_ai = 0
+        # Process each department individually
+        successful_departments = 0
         
         for filepath, dept_key, filename in client_suspecting_ai_files:
             try:
@@ -297,16 +314,14 @@ class ClientSuspectingAiProcessor:
                 # Read the CSV
                 df = pd.read_csv(filepath)
                 if df.empty:
+                    print(f"⚠️  Empty file: {filename}")
                     continue
                 
-                # Add to totals
+                # Calculate department-specific metrics
                 file_total = len(df)
                 file_suspected = len(df[df['llm_output'].astype(str).str.upper() == 'TRUE'])
                 
-                total_conversations += file_total
-                total_suspected_ai += file_suspected
-                
-                # Calculate percentage for this file
+                # Calculate percentage for this department
                 if file_total > 0:
                     file_percentage = (file_suspected / file_total) * 100
                     
@@ -315,27 +330,26 @@ class ClientSuspectingAiProcessor:
                     
                     # Save individual summary
                     self.save_summary_report(file_percentage, dept_name)
+                    
+                    # Update this department's snapshot sheet
+                    if self.service:
+                        update_success = self.update_snapshot_sheet(file_percentage, dept_key)
+                        if update_success:
+                            successful_departments += 1
+                        else:
+                            print(f"⚠️  Failed to update {dept_name} snapshot sheet")
                 
             except Exception as e:
                 print(f"❌ Error processing {filename}: {str(e)}")
                 continue
         
-        # Calculate overall percentage
-        if total_conversations > 0:
-            overall_percentage = (total_suspected_ai / total_conversations) * 100
-            
-            print(f"\n📊 Overall Client Suspecting AI Analysis:")
-            print(f"   Total conversations: {total_conversations}")
-            print(f"   Total suspected AI: {total_suspected_ai}")
-            print(f"   Overall percentage: {overall_percentage:.1f}%")
-            
-            # Update snapshot sheet with overall percentage
-            if self.service:
-                self.update_snapshot_sheet(overall_percentage)
-            
+        # Summary
+        if successful_departments > 0:
+            print(f"\n✅ Client Suspecting AI Analysis completed!")
+            print(f"   Successfully updated {successful_departments} department snapshot(s)")
             return True
         else:
-            print("❌ No conversations found across all files")
+            print("❌ Failed to update any department snapshots")
             return False
 
 def main():

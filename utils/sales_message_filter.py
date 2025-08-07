@@ -6,6 +6,7 @@ Filters out automated sales messages from conversations before rule breaking ana
 import re
 import json
 from typing import List, Dict, Any
+from difflib import SequenceMatcher
 
 # List of automated messages to exclude
 EXCLUDED_MESSAGES = [
@@ -107,10 +108,25 @@ def normalize_text(text: str) -> str:
     return normalized
 
 
-def is_excluded_message(message_content: str, excluded_messages: List[str] = None) -> bool:
+def calculate_similarity(str1: str, str2: str) -> float:
     """
-    Check if a message should be excluded based on the exclusion list.
-    Uses normalized comparison to handle case and whitespace differences.
+    Calculate similarity ratio between two strings.
+    Returns a value between 0 and 1, where 1 is identical.
+    """
+    return SequenceMatcher(None, str1, str2).ratio()
+
+
+def is_excluded_message(message_content: str, excluded_messages: List[str] = None, similarity_threshold: float = 0.7) -> bool:
+    """
+    Check if a message should be excluded based on similarity matching.
+    
+    Args:
+        message_content: The message to check
+        excluded_messages: List of excluded message patterns
+        similarity_threshold: Minimum similarity ratio to consider a match (default: 0.7)
+    
+    Returns:
+        True if the message should be excluded, False otherwise
     """
     if not message_content:
         return False
@@ -125,30 +141,37 @@ def is_excluded_message(message_content: str, excluded_messages: List[str] = Non
     for excluded in excluded_messages:
         normalized_excluded = normalize_text(excluded)
         
-        # Check for exact match after normalization
+        # Check for exact match first (fastest)
         if normalized_content == normalized_excluded:
             return True
         
-        # Also check if the excluded message is contained within the content
-        # This handles cases where there might be slight variations
-        if normalized_excluded in normalized_content or normalized_content in normalized_excluded:
-            # Additional check to avoid false positives - ensure it's a substantial match
-            # (at least 80% of the shorter text is contained in the longer one)
-            shorter = min(len(normalized_excluded), len(normalized_content))
-            if shorter > 20:  # Only for messages longer than 20 chars
-                return True
+        # Calculate similarity
+        similarity = calculate_similarity(normalized_content, normalized_excluded)
+        
+        if similarity >= similarity_threshold:
+            return True
+        
+        # Also check for containment (one message fully contains the other)
+        # This handles cases where the bot message has extra text appended
+        if len(normalized_excluded) > 20:  # Only for substantial messages
+            if normalized_excluded in normalized_content:
+                # Check if the excluded message makes up most of the content
+                containment_ratio = len(normalized_excluded) / len(normalized_content)
+                if containment_ratio >= 0.8:  # 80% of the message is the excluded text
+                    return True
     
     return False
 
 
-def filter_sales_conversations(conversations: List[Dict[str, Any]], departments: List[str] = None) -> List[Dict[str, Any]]:
+def filter_sales_conversations(conversations: List[Dict[str, Any]], departments: List[str] = None, similarity_threshold: float = 0.7) -> List[Dict[str, Any]]:
     """
-    Filter automated sales messages from conversations.
+    Filter automated sales messages from conversations using similarity matching.
     Only applies to MV Sales and CC Sales departments.
     
     Args:
         conversations: List of conversation dictionaries in JSON format
         departments: List of department names to check (defaults to ['MV Sales', 'CC Sales'])
+        similarity_threshold: Minimum similarity ratio for exclusion (default: 0.7)
     
     Returns:
         List of filtered conversations with automated messages removed
@@ -174,7 +197,7 @@ def filter_sales_conversations(conversations: List[Dict[str, Any]], departments:
             for message in filtered_conv['conversation']:
                 # Only filter normal messages (not tool messages)
                 if message.get('type') == 'normal message' and 'content' in message:
-                    if is_excluded_message(message['content']):
+                    if is_excluded_message(message['content'], EXCLUDED_MESSAGES, similarity_threshold):
                         total_messages_removed += 1
                         continue  # Skip this message
                 

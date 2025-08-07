@@ -12,7 +12,18 @@ class ThreateningProcessor:
         self.credentials_path = credentials_path
         self.service = None
         self.setup_sheets_api()
-        self.snapshot_sheet_id = '1XkVcHlkh8fEp7mmBD1Zkavdp2blBLwSABT1dE_sOf74'
+        # Snapshot sheet IDs for each department
+        self.department_sheets = {
+            'doctors': '1STHimb0IJ077iuBtTOwsa-GD8jStjU3SiBW7yBWom-E',
+            'delighters': '1PV0ZmobUYKHGZvHC7IfJ1t6HrJMTFi6YRbpISCouIfQ',
+            'cc_sales': '1te1fbAXhURIUO0EzQ2Mrorv3a6GDtEVM_5np9TO775o',
+            'cc_resolvers': '1QdmaTc5F2VUJ0Yu0kNF9d6ETnkMOlOgi18P7XlBSyHg',
+            'filipina': '1E5wHZKSDXQZlHIb3sV4ZWqIxvboLduzUEU0eupK7tys',
+            'african': '1__KlrVjcpR8RoYfTYMYZ_EgddUSXMhK3bJO0fTGwDig',
+            'ethiopian': '1ENzdgiwUEtBSb5sHZJWs5aG8g2H62Low8doaDZf8s90',
+            'mv_resolvers': '1XkVcHlkh8fEp7mmBD1Zkavdp2blBLwSABT1dE_sOf74',
+            'mv_sales': '1agrl9hlBhemXkiojuWKbqiMHKUzxGgos4JSkXxw7NAk'
+        }
         
         # Create output directory for summaries
         yesterday = datetime.now() - timedelta(days=1)
@@ -133,15 +144,23 @@ class ThreateningProcessor:
             index = index // 26 - 1
         return result
 
-    def find_column_by_name(self, column_name, sheet_name='Data'):
+    def find_column_by_name(self, column_name, sheet_name='Data', sheet_id=None):
         """Find column letter by exact column name with detailed debugging"""
         try:
             print(f"🔍 Searching for column '{column_name}' in headers...")
             
+            # Check if we have a sheet ID to work with
+            if not sheet_id and not hasattr(self, 'snapshot_sheet_id'):
+                print("❌ No snapshot sheet ID configured")
+                return None
+            
+            # Use provided sheet_id or fall back to snapshot_sheet_id
+            spreadsheet_id = sheet_id if sheet_id else self.snapshot_sheet_id
+            
             # Get the first row (headers)
             range_name = f"{sheet_name}!1:1"
             result = self.service.spreadsheets().values().get(
-                spreadsheetId=self.snapshot_sheet_id,
+                spreadsheetId=spreadsheet_id,
                 range=range_name
             ).execute()
             
@@ -168,13 +187,21 @@ class ThreateningProcessor:
             print(f"❌ Error finding column: {str(e)}")
             return None
 
-    def find_date_row(self, target_date, sheet_name='Data'):
+    def find_date_row(self, target_date, sheet_name='Data', sheet_id=None):
         """Find the row number for a specific date"""
         try:
+            # Check if we have a sheet ID to work with
+            if not sheet_id and not hasattr(self, 'snapshot_sheet_id'):
+                print("❌ No snapshot sheet ID configured")
+                return None
+            
+            # Use provided sheet_id or fall back to snapshot_sheet_id
+            spreadsheet_id = sheet_id if sheet_id else self.snapshot_sheet_id
+            
             # Get all data from column A (assuming dates are in column A)
             range_name = f"{sheet_name}!A:A"
             result = self.service.spreadsheets().values().get(
-                spreadsheetId=self.snapshot_sheet_id,
+                spreadsheetId=spreadsheet_id,
                 range=range_name
             ).execute()
             
@@ -185,24 +212,32 @@ class ThreateningProcessor:
                 if row and len(row) > 0:
                     cell_value = str(row[0]).strip()
                     if cell_value == target_date_str:
-                        return i + 1  # Google Sheets is 1-indexed
+                        return i + 1, sheet_name  # Google Sheets is 1-indexed
             
             print(f"❌ Date {target_date_str} not found in column A")
-            return None
+            return None, None
             
         except Exception as e:
             print(f"❌ Error finding date row: {str(e)}")
-            return None
+            return None, None
 
-    def update_cell_value(self, range_name, value):
+    def update_cell_value(self, range_name, value, sheet_id=None):
         """Update a specific cell with a value"""
         try:
+            # Check if we have a sheet ID to work with
+            if not sheet_id and not hasattr(self, 'snapshot_sheet_id'):
+                print("❌ No snapshot sheet ID configured")
+                return False
+            
+            # Use provided sheet_id or fall back to snapshot_sheet_id
+            spreadsheet_id = sheet_id if sheet_id else self.snapshot_sheet_id
+            
             body = {
                 'values': [[value]]
             }
             
             result = self.service.spreadsheets().values().update(
-                spreadsheetId=self.snapshot_sheet_id,
+                spreadsheetId=spreadsheet_id,
                 range=range_name,
                 valueInputOption='RAW',
                 body=body
@@ -214,33 +249,40 @@ class ThreateningProcessor:
             print(f"❌ Error updating cell {range_name}: {str(e)}")
             return False
 
-    def update_snapshot_sheet(self, percentage):
-        """Update threatening percentage in snapshot sheet for yesterday's date"""
+    def update_snapshot_sheet(self, percentage, dept_key):
+        """Update threatening percentage in department snapshot sheet for yesterday's date"""
         try:
             if not self.service:
                 print("❌ Google Sheets API not available")
                 return False
             
+            # Get department sheet ID
+            if dept_key not in self.department_sheets:
+                print(f"❌ No snapshot sheet configured for department: {dept_key}")
+                return False
+                
+            sheet_id = self.department_sheets[dept_key]
             yesterday = datetime.now() - timedelta(days=1)
             
             # Find the column for "Threatening Case Identifier"
-            col_letter = self.find_column_by_name("Threatening Case Identifier")
+            col_letter = self.find_column_by_name("Threatening Case Identifier", sheet_id=sheet_id)
             if not col_letter:
                 print("⚠️ Please manually add 'Threatening Case Identifier' column to the snapshot sheet")
                 return False
             
             # Find the row for yesterday's date
-            date_row = self.find_date_row(yesterday)
+            date_row, sheet_name = self.find_date_row(yesterday, sheet_id=sheet_id)
             if not date_row:
                 print(f"⚠️ Could not find date {yesterday.strftime('%Y-%m-%d')} in snapshot sheet")
                 return False
             
             # Update the cell with threatening percentage
-            range_name = f"Data!{col_letter}{date_row}"
-            success = self.update_cell_value(range_name, f"{percentage}%")
+            range_name = f"{sheet_name}!{col_letter}{date_row}"
+            success = self.update_cell_value(range_name, f"{percentage:.1f}%", sheet_id=sheet_id)
             
             if success:
-                print(f"📊 Updated snapshot sheet with threatening percentage: {percentage}%")
+                dept_name = dept_key.replace('_', ' ').title()
+                print(f"📊 Updated {dept_name} snapshot sheet with threatening percentage: {percentage:.1f}%")
             
             return success
             
@@ -281,7 +323,6 @@ class ThreateningProcessor:
         
         print(f"📁 Found {len(files)} threatening file(s) to process")
         
-        total_percentage = 0
         successful_files = 0
         
         for filepath, dept_key, filename in files:
@@ -307,22 +348,36 @@ class ThreateningProcessor:
                 # Save individual summary
                 self.save_summary_report(percentage, dept_name)
                 
-                total_percentage += percentage
-                successful_files += 1
-                
-                print(f"✅ {dept_name}: {percentage}% threatening cases")
+                # Update department snapshot sheet
+                if self.service and dept_key in self.department_sheets:
+                    update_success = self.update_snapshot_sheet(percentage, dept_key)
+                    if update_success:
+                        successful_files += 1
+                        print(f"✅ {dept_name}: {percentage}% threatening cases (snapshot updated)")
+                    else:
+                        print(f"⚠️  {dept_name}: {percentage}% threatening cases (failed to update snapshot)")
+                else:
+                    print(f"⚠️  {dept_name}: {percentage}% threatening cases (no snapshot sheet configured)")
+                    successful_files += 1
             
             else:
                 print(f"❌ Failed to process {filename}")
         
-        # Update snapshot sheet with average percentage if we have data
+        # Summary of processing
         if successful_files > 0:
-            average_percentage = total_percentage / successful_files
-            self.update_snapshot_sheet(round(average_percentage, 1))
             print(f"\n📈 Threatening analysis completed!")
-            print(f"   Average threatening percentage: {average_percentage:.1f}%")
             print(f"   Processed {successful_files} department(s)")
         else:
             print("\n⚠️ No valid threatening data found to process")
         
-        return successful_files > 0 
+        return successful_files > 0
+
+
+def main():
+    """Main function for standalone execution"""
+    processor = ThreateningProcessor()
+    processor.process_all_files()
+
+
+if __name__ == "__main__":
+    main() 

@@ -17,17 +17,56 @@ import re
 from datetime import datetime, timedelta
 from collections import Counter
 from pathlib import Path
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
 
 
 class FTRProcessor:
     """Post processor for FTR analysis results"""
     
-    def __init__(self):
+    def __init__(self, target_date=None, credentials_path='credentials.json'):
         # Create directory with date subfolder to match other processors
-        yesterday = datetime.now() - timedelta(days=1)
-        date_folder = yesterday.strftime('%Y-%m-%d')
+        if target_date is None:
+            target_date = datetime.now() - timedelta(days=1)
+        self.target_date = target_date
+        date_folder = target_date.strftime('%Y-%m-%d')
         self.ftr_dir = f"outputs/ftr/{date_folder}"
         os.makedirs(self.ftr_dir, exist_ok=True)
+        
+        # Google Sheets API setup
+        self.credentials_path = credentials_path
+        self.service = None
+        self.setup_sheets_api()
+        
+        # Department sheet IDs for snapshot updates
+        self.department_sheets = {
+            'doctors': '1STHimb0IJ077iuBtTOwsa-GD8jStjU3SiBW7yBWom-E',
+            'delighters': '1PV0ZmobUYKHGZvHC7IfJ1t6HrJMTFi6YRbpISCouIfQ',
+            'cc_sales': '1te1fbAXhURIUO0EzQ2Mrorv3a6GDtEVM_5np9TO775o',
+            'cc_resolvers': '1QdmaTc5F2VUJ0Yu0kNF9d6ETnkMOlOgi18P7XlBSyHg',
+            'filipina': '1E5wHZKSDXQZlHIb3sV4ZWqIxvboLduzUEU0eupK7tys',
+            'african': '1__KlrVjcpR8RoYfTYMYZ_EgddUSXMhK3bJO0fTGwDig',
+            'ethiopian': '1ENzdgiwUEtBSb5sHZJWs5aG8g2H62Low8doaDZf8s90',
+            'mv_resolvers': '1XkVcHlkh8fEp7mmBD1Zkavdp2blBLwSABT1dE_sOf74',
+            'mv_sales': '1agrl9hlBhemXkiojuWKbqiMHKUzxGgos4JSkXxw7NAk'
+        }
+    
+    def setup_sheets_api(self):
+        """Initialize Google Sheets API service"""
+        try:
+            if os.path.exists(self.credentials_path):
+                credentials = Credentials.from_service_account_file(
+                    self.credentials_path,
+                    scopes=['https://www.googleapis.com/auth/spreadsheets']
+                )
+                self.service = build('sheets', 'v4', credentials=credentials)
+                print("✅ Google Sheets API initialized successfully")
+            else:
+                print(f"❌ Credentials file not found: {self.credentials_path}")
+                self.service = None
+        except Exception as e:
+            print(f"❌ Error setting up Google Sheets API: {str(e)}")
+            self.service = None
     
     def safe_json_parse(self, json_str):
         """Safely parse JSON string from LLM output"""
@@ -53,10 +92,9 @@ class FTRProcessor:
             return []
     
     def find_ftr_files(self):
-        """Find FTR LLM output files for yesterday's date"""
-        yesterday = datetime.now() - timedelta(days=1)
-        date_folder = yesterday.strftime('%Y-%m-%d')
-        date_str = yesterday.strftime('%m_%d')
+        """Find FTR LLM output files for the target date"""
+        date_folder = self.target_date.strftime('%Y-%m-%d')
+        date_str = self.target_date.strftime('%m_%d')
         
         llm_outputs_dir = f"outputs/LLM_outputs/{date_folder}"
         
@@ -112,7 +150,7 @@ class FTRProcessor:
                 conversation = str(row.get('conversation', ''))
                 llm_output = str(row['llm_output'])
                 
-                # Parse the FTR responses (JSON array of "Yes"/"No")
+                # Parse the FTR responses (JSON array of objects with chatResolution field)
                 ftr_responses = self.safe_json_parse(llm_output)
                 
                 # Add original data row
@@ -130,10 +168,18 @@ class FTRProcessor:
                 total_chats = 0
                 resolved_chats = 0
                 
-                if ftr_responses:
+                if ftr_responses and isinstance(ftr_responses, list):
                     # Count total chats and resolved chats
                     total_chats = len(ftr_responses)
-                    resolved_chats = ftr_responses.count('Yes')
+                    
+                    # Count "Yes" responses from the chatResolution field
+                    for response in ftr_responses:
+                        if isinstance(response, dict) and response.get('chatResolution') == 'Yes':
+                            resolved_chats += 1
+                
+                # Debug: Log sample data for first few customers
+                if total_customers < 3 and ftr_responses:
+                    print(f"   Customer {customer_name}: {total_chats} chats, {resolved_chats} resolved")
                 
                 # Add to overall totals
                 total_chats_all_customers += total_chats
@@ -215,6 +261,141 @@ class FTRProcessor:
         else:
             return dept_name
     
+    def index_to_column_letter(self, index):
+        """Convert 0-based column index to Google Sheets column letter (A, B, ..., Z, AA, AB, ...)"""
+        result = ""
+        while index >= 0:
+            result = chr(index % 26 + ord('A')) + result
+            index = index // 26 - 1
+        return result
+    
+    def find_column_by_name(self, column_name, sheet_id, sheet_name='Data'):
+        """Find column letter by exact column name"""
+        try:
+            # Get the first row (headers)
+            range_name = f"{sheet_name}!1:1"
+            result = self.service.spreadsheets().values().get(
+                spreadsheetId=sheet_id,
+                range=range_name
+            ).execute()
+            
+            headers = result.get('values', [[]])[0]
+            
+            # Try exact case-sensitive match first
+            for i, header in enumerate(headers):
+                if header and str(header).strip() == column_name:
+                    column_letter = self.index_to_column_letter(i)
+                    print(f"📍 Found exact match for '{column_name}' at column {column_letter}")
+                    return column_letter
+            
+            # Try case-insensitive match
+            for i, header in enumerate(headers):
+                if header and str(header).strip().lower() == column_name.lower():
+                    column_letter = self.index_to_column_letter(i)
+                    print(f"📍 Found case-insensitive match for '{column_name}' at column {column_letter}")
+                    return column_letter
+            
+            print(f"❌ Column '{column_name}' not found in sheet headers")
+            return None
+            
+        except Exception as e:
+            print(f"❌ Error finding column: {str(e)}")
+            return None
+    
+    def find_date_row(self, target_date, sheet_id, sheet_name='Data'):
+        """Find the row number for a specific date"""
+        try:
+            # Get all data from column A (assuming dates are in column A)
+            range_name = f"{sheet_name}!A:A"
+            result = self.service.spreadsheets().values().get(
+                spreadsheetId=sheet_id,
+                range=range_name
+            ).execute()
+            
+            values = result.get('values', [])
+            target_date_str = target_date.strftime('%Y-%m-%d')
+            
+            for i, row in enumerate(values):
+                if row and len(row) > 0:
+                    cell_value = str(row[0]).strip()
+                    if cell_value == target_date_str:
+                        return i + 1, sheet_name  # Google Sheets is 1-indexed
+            
+            print(f"❌ Date {target_date_str} not found in column A")
+            return None, None
+            
+        except Exception as e:
+            print(f"❌ Error finding date row: {str(e)}")
+            return None, None
+    
+    def update_cell_value(self, range_name, value, sheet_id):
+        """Update a specific cell with a value"""
+        try:
+            body = {
+                'values': [[value]]
+            }
+            
+            result = self.service.spreadsheets().values().update(
+                spreadsheetId=sheet_id,
+                range=range_name,
+                valueInputOption='RAW',
+                body=body
+            ).execute()
+            
+            print(f"✅ Updated {range_name} with value: {value}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error updating cell {range_name}: {str(e)}")
+            return False
+    
+    def update_snapshot_sheet(self, ftr_percentage, dept_key):
+        """Update FTR percentage in department snapshot sheet for yesterday's date"""
+        try:
+            if not self.service:
+                print("❌ Google Sheets API not available")
+                return False
+            
+            # Get department sheet ID
+            if dept_key not in self.department_sheets:
+                print(f"❌ No snapshot sheet configured for department: {dept_key}")
+                return False
+                
+            sheet_id = self.department_sheets[dept_key]
+            yesterday = datetime.now() - timedelta(days=1)
+            
+            # Find the column for "FTR" or fallback to "First Time resolution on actionable chats"
+            col_letter = self.find_column_by_name("FTR", sheet_id)
+            if not col_letter:
+                print("⚠️ 'FTR' column not found, trying fallback column name...")
+                col_letter = self.find_column_by_name("First Time resolution on actionable chats", sheet_id)
+                if col_letter:
+                    print("✅ Found fallback column 'First Time resolution on actionable chats'")
+                else:
+                    print("❌ Neither 'FTR' nor 'First Time resolution on actionable chats' column found")
+                    print("💡 Please manually add one of these columns to the snapshot sheet")
+                    return False
+            
+            # Find the row for yesterday's date
+            date_row, sheet_name = self.find_date_row(yesterday, sheet_id)
+            if not date_row:
+                print(f"⚠️ Could not find date {yesterday.strftime('%Y-%m-%d')} in snapshot sheet")
+                return False
+            
+            # Update the cell with FTR percentage
+            range_name = f"{sheet_name}!{col_letter}{date_row}"
+            success = self.update_cell_value(range_name, f"{ftr_percentage:.1f}%", sheet_id)
+            
+            if success:
+                dept_name = dept_key.replace('_', ' ').title()
+                print(f"📊 Updated {dept_name} snapshot sheet with FTR: {ftr_percentage:.1f}%")
+            
+            return success
+            
+        except Exception as e:
+            print(f"❌ Error updating snapshot sheet: {str(e)}")
+            return False
+    
     def process_all_files(self):
         """Process all FTR files and generate combined reports"""
         print(f"🚀 Starting FTR post-processing...")
@@ -254,8 +435,18 @@ class FTRProcessor:
                         'total_chats': analysis_results['total_chats'],
                         'avg_chats': analysis_results['average_chats_per_customer']
                     }
-                    success_count += 1
-                    print(f"✅ Completed {dept_name}")
+                    
+                    # Update department snapshot sheet
+                    if self.service and dept_key in self.department_sheets:
+                        update_success = self.update_snapshot_sheet(overall_ftr, dept_key)
+                        if update_success:
+                            success_count += 1
+                            print(f"✅ Completed {dept_name} (snapshot updated)")
+                        else:
+                            print(f"⚠️  Completed {dept_name} (failed to update snapshot)")
+                    else:
+                        print(f"⚠️  Completed {dept_name} (no snapshot sheet configured)")
+                        success_count += 1
                 
             except Exception as e:
                 print(f"❌ Error processing {filename}: {str(e)}")

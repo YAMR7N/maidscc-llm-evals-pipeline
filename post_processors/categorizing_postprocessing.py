@@ -6,11 +6,16 @@ Analyzes the output from categorizing analysis and creates clean summary statist
 Reads: LLM_outputs/{date}/categorizing_{dept_name}_{date}.csv
 Outputs: Clean CSV with columns:
 - Category: The conversation category (N/A excluded)
-- % Intervention: Percentage of ALL chats that are interventions in this category
-- % Transfers: Percentage of ALL chats that are transfers in this category  
-- % of ALL chats: Percentage of all chats that belong to this category
-Note: % Intervention + % Transfers = % of ALL chats for each category
-(Sorted by % of ALL chats, descending)
+- Count: Number of conversations in this category
+- Category %: Percentage of all chats that belong to this category
+- Coverage Per Category %: Percentage of chats IN THIS CATEGORY that were handled by bot
+- Intervention By Agent %: Percentage of ALL chats that had intervention in this category
+- Transferred by Bot %: Percentage of ALL chats that were transferred in this category
+- %AllChatsNotHandled: Sum of Intervention + Transfer percentages (all relative to total chats)
+
+Note: All percentages except "Coverage Per Category %" are calculated relative to TOTAL chats.
+      "Coverage Per Category %" is calculated relative to the category's count.
+(Sorted by Count, descending)
 """
 
 import pandas as pd
@@ -72,8 +77,13 @@ class CategorizingProcessor:
         
         # Check if required columns exist
         if 'llm_output' not in df.columns:
-            print(f"❌ Error: 'llm_output' column not found. Available columns: {list(df.columns)}")
-            return None
+            # Handle new format where columns are already extracted
+            if all(col in df.columns for col in ['Categories', 'InterventionOrTransfer?', 'CategoryCausingInterventionOrTransfer']):
+                print(f"ℹ️  Using pre-extracted format (no llm_output column)")
+                return self.analyze_pre_extracted_data(df)
+            else:
+                print(f"❌ Error: 'llm_output' column not found. Available columns: {list(df.columns)}")
+                return None
         
         # Parse JSON outputs
         parsed_results = []
@@ -134,6 +144,48 @@ class CategorizingProcessor:
         
         return results_df
 
+    def analyze_pre_extracted_data(self, df):
+        """Analyze categorizing data where columns are already extracted"""
+        parsed_results = []
+        
+        for idx, row in df.iterrows():
+            # Parse comma-separated categories
+            categories_str = str(row.get('Categories', ''))
+            if pd.isna(row.get('Categories')) or categories_str == 'nan':
+                categories_list = []
+            else:
+                categories_list = [cat.strip() for cat in categories_str.split(',') if cat.strip() and cat.strip() != 'N/A']
+            
+            intervention_or_transfer = str(row.get('InterventionOrTransfer?', 'N/A'))
+            if pd.isna(row.get('InterventionOrTransfer?')) or intervention_or_transfer == 'nan':
+                intervention_or_transfer = 'N/A'
+                
+            category_causing = str(row.get('CategoryCausingInterventionOrTransfer', 'N/A'))
+            if pd.isna(row.get('CategoryCausingInterventionOrTransfer')) or category_causing == 'nan':
+                category_causing = 'N/A'
+            
+            parsed_results.append({
+                'chat_id': row.get('conversation_id', f'chat_{idx}'),
+                'categories': categories_list,
+                'intervention_or_transfer': intervention_or_transfer,
+                'category_causing_intervention_transfer': category_causing,
+                'original_output': f"Pre-extracted: Categories={categories_str}, Intervention={intervention_or_transfer}"
+            })
+        
+        print(f"✅ Successfully parsed: {len(parsed_results)}/{len(df)} conversations")
+        
+        # Create results DataFrame
+        results_df = pd.DataFrame(parsed_results)
+        
+        # Print intervention/transfer breakdown
+        intervention_counts = Counter(results_df['intervention_or_transfer'])
+        print(f"\n🔄 Intervention/Transfer Breakdown:")
+        for int_type, count in intervention_counts.most_common():
+            percentage = (count / len(results_df)) * 100
+            print(f"  {int_type}: {count} ({percentage:.1f}%)")
+        
+        return results_df
+
     def create_summary_report(self, results_df, department, output_filename):
         """Create clean summary report from parsed results"""
         
@@ -142,11 +194,7 @@ class CategorizingProcessor:
         for categories_list in results_df['categories']:
             all_categories.update(categories_list)
         
-        # Calculate overall percentage of chats not handled by bot
         total_chats = len(results_df)
-        chats_not_handled = len(results_df[results_df['intervention_or_transfer'].isin(['Intervention', 'Transfer'])])
-        pct_all_chats_not_handled = (chats_not_handled / total_chats * 100) if total_chats > 0 else 0
-        
         summary_data = []
         
         # Process each category
@@ -173,10 +221,16 @@ class CategorizingProcessor:
             chats_intervention = sum(1 for chat in chats_with_category if chat['intervention_or_transfer'] == 'Intervention')
             chats_transfer = sum(1 for chat in chats_with_category if chat['intervention_or_transfer'] == 'Transfer')
             
-            # Calculate percentages relative to category count
+            # Calculate coverage percentage relative to category count, others relative to total chats
             coverage_per_category_pct = (chats_handled_by_bot / category_count * 100) if category_count > 0 else 0
-            intervention_by_agent_pct = (chats_intervention / category_count * 100) if category_count > 0 else 0
-            transferred_by_bot_pct = (chats_transfer / category_count * 100) if category_count > 0 else 0
+            intervention_by_agent_pct = (chats_intervention / total_chats * 100) if total_chats > 0 else 0
+            transferred_by_bot_pct = (chats_transfer / total_chats * 100) if total_chats > 0 else 0
+            
+            # %AllChatsNotHandled = transferred by bot + intervention by agent (both relative to total chats)
+            pct_all_chats_not_handled = intervention_by_agent_pct + transferred_by_bot_pct
+            
+            # Note: intervention_by_agent_pct + transferred_by_bot_pct will sum to the portion of this category
+            # relative to total chats that were not handled by bot (coverage_per_category_pct is different)
             
             summary_data.append({
                 'Category': category,
@@ -195,6 +249,31 @@ class CategorizingProcessor:
         if len(summary_df) > 0:
             summary_df = summary_df.sort_values('Count', ascending=False)
         
+        # Add Total row with overall intervention/transfer percentages
+        total_intervention = sum(1 for _, row in results_df.iterrows() if row['intervention_or_transfer'] == 'Intervention')
+        total_transfer = sum(1 for _, row in results_df.iterrows() if row['intervention_or_transfer'] == 'Transfer')
+        total_na = sum(1 for _, row in results_df.iterrows() if row['intervention_or_transfer'] == 'N/A')
+        
+        # Calculate percentages relative to total chats
+        total_intervention_pct = (total_intervention / total_chats * 100) if total_chats > 0 else 0
+        total_transfer_pct = (total_transfer / total_chats * 100) if total_chats > 0 else 0
+        total_coverage_pct = (total_na / total_chats * 100) if total_chats > 0 else 0
+        total_not_handled_pct = total_intervention_pct + total_transfer_pct
+        
+        # Add Total row
+        total_row = pd.DataFrame([{
+            'Category': 'TOTAL',
+            'Count': total_chats,
+            'Category %': '100.00%',
+            'Coverage Per Category %': f"{total_coverage_pct:.2f}%",
+            'Intervention By Agent %': f"{total_intervention_pct:.2f}%",
+            'Transferred by Bot %': f"{total_transfer_pct:.2f}%",
+            '%AllChatsNotHandled': f"{total_not_handled_pct:.2f}%"
+        }])
+        
+        # Append Total row to summary
+        summary_df = pd.concat([summary_df, total_row], ignore_index=True)
+        
         # Save summary
         summary_df.to_csv(output_filename, index=False)
         print(f"💾 Summary saved to: {output_filename}")
@@ -202,14 +281,15 @@ class CategorizingProcessor:
         # Show quick summary
         print(f"\n📊 Quick Summary for {department}:")
         print(f"Total conversations analyzed: {total_chats}")
-        print(f"Overall chats not handled by bot: {chats_not_handled} ({pct_all_chats_not_handled:.1f}%)")
         
         # Show top 5 categories by count
         if len(summary_df) > 0:
             print(f"\nTop categories by volume:")
             for i, row in summary_df.head(5).iterrows():
-                print(f"  {i+1}. {row['Category']}: {row['Count']} chats ({row['Category %']})")
-                print(f"      Coverage: {row['Coverage Per Category %']}, Intervention: {row['Intervention By Agent %']}, Transfer: {row['Transferred by Bot %']}")
+                print(f"  {i+1}. {row['Category']}: {row['Count']} chats ({row['Category %']} of all chats)")
+                print(f"      Bot handled: {row['Coverage Per Category %']} of all chats")
+                print(f"      Intervention: {row['Intervention By Agent %']} of all chats")  
+                print(f"      Transfer: {row['Transferred by Bot %']} of all chats")
         
         # Show overall intervention/transfer split
         int_counts = results_df['intervention_or_transfer'].value_counts()
@@ -217,6 +297,14 @@ class CategorizingProcessor:
         for int_type, count in int_counts.items():
             percentage = (count / total_chats * 100)
             print(f"  {int_type}: {count} ({percentage:.1f}%)")
+        
+        # Show TOTAL row info
+        total_row_data = summary_df[summary_df['Category'] == 'TOTAL'].iloc[0]
+        print(f"\n📊 TOTAL Summary:")
+        print(f"  Coverage (Bot handled): {total_row_data['Coverage Per Category %']}")
+        print(f"  Intervention by Agent: {total_row_data['Intervention By Agent %']}")
+        print(f"  Transferred by Bot: {total_row_data['Transferred by Bot %']}")
+        print(f"  Total Not Handled: {total_row_data['%AllChatsNotHandled']}")
         
         return summary_df
 
