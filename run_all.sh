@@ -78,7 +78,7 @@ fi
 case $COMMAND in
     sa) PROMPT="sentiment_analysis"; MODEL="${MODEL:-gpt-4o}"; FORMAT="${FORMAT:-segmented}" ;;
     rb) PROMPT="rule_breaking"; MODEL="${MODEL:-o4-mini}"; FORMAT="${FORMAT:-json}" ;;
-    ftr) PROMPT="ftr"; MODEL="${MODEL:-gpt-4o}"; FORMAT="${FORMAT:-transparent}" ;;
+    ftr) PROMPT="ftr"; MODEL="${MODEL:-gpt-4o}"; FORMAT="${FORMAT:-xml3d}" ;;
     false_promises) PROMPT="false_promises"; MODEL="${MODEL:-gemini-2.5-pro}"; FORMAT="${FORMAT:-json}" ;;
     categorizing) PROMPT="categorizing"; MODEL="${MODEL:-gpt-4o}"; FORMAT="${FORMAT:-xml}" ;;
     policy_escalation) PROMPT="policy_escalation"; MODEL="${MODEL:-gemini-2.5-pro}"; FORMAT="${FORMAT:-xml}" ;;

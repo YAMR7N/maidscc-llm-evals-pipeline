@@ -15,6 +15,7 @@ import os
 import pandas as pd
 import asyncio
 import openai
+import anthropic
 import google.generativeai as genai
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -91,6 +92,14 @@ class LLMProcessor:
             'conversations_processed': 0
         }
         
+        # Retry configuration (can be overridden via model config)
+        self.retry_config = {
+            'max_retries': self.model_config.get('max_retries', 6),
+            'base_delay': self.model_config.get('base_delay', 1.0),
+            'max_delay': self.model_config.get('max_delay', 30.0),
+            'timeout_seconds': self.model_config.get('timeout_seconds', 60.0)
+        }
+        
         # Initialize appropriate client based on provider
         if self.provider == "openai":
             self.client = openai.AsyncOpenAI()
@@ -98,6 +107,11 @@ class LLMProcessor:
             # Configure Gemini
             genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
             self.gemini_model = genai.GenerativeModel(model)
+        elif self.provider == "anthropic":
+            # Initialize Anthropic client
+            self.anthropic_client = anthropic.AsyncAnthropic(
+                api_key=os.getenv('ANTHROPIC_API_KEY')
+            )
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
     
@@ -161,6 +175,16 @@ class LLMProcessor:
         elif self.provider == "gemini":
             # Gemini: Always 20k
             base_tokens = 20000
+        elif self.provider == "anthropic":
+            # Anthropic: Different limits for different models
+            if "opus" in self.model:
+                base_tokens = 4096  # Opus has 4k output limit
+            elif "sonnet" in self.model:
+                base_tokens = 4096  # Sonnet also has 4k output limit
+            elif "haiku" in self.model:
+                base_tokens = 4096  # Haiku also has 4k output limit
+            else:
+                base_tokens = 4096  # Default for Anthropic
         
         # Apply retry multiplier
         return base_tokens * retry_multiplier
@@ -242,6 +266,8 @@ class LLMProcessor:
                     return await self._analyze_with_openai_with_retry(conversation, final_prompt, chat_id)
                 elif self.provider == "gemini":
                     return await self._analyze_with_gemini_with_retry(conversation, final_prompt, chat_id)
+                elif self.provider == "anthropic":
+                    return await self._analyze_with_anthropic_with_retry(conversation, final_prompt, chat_id)
                 else:
                     return {"llm_output": "", "error": f"Unsupported provider: {self.provider}"}
                     
@@ -251,10 +277,10 @@ class LLMProcessor:
     
     async def _analyze_with_openai_with_retry(self, conversation, prompt, chat_id=None):
         """Wrapper for OpenAI API calls with retry logic and doubled tokens on retry"""
-        max_retries = 3
-        base_delay = 1.0
-        max_delay = 30.0
-        timeout_seconds = 60.0
+        max_retries = self.retry_config['max_retries']
+        base_delay = self.retry_config['base_delay']
+        max_delay = self.retry_config['max_delay']
+        timeout_seconds = self.retry_config['timeout_seconds']
         
         chat_id_display = chat_id[-8:] if chat_id and len(chat_id) > 8 else chat_id or "unknown"
         
@@ -377,10 +403,10 @@ class LLMProcessor:
     
     async def _analyze_with_gemini_with_retry(self, conversation, prompt, chat_id=None):
         """Wrapper for Gemini API calls with retry logic and doubled tokens on retry"""
-        max_retries = 3
-        base_delay = 1.0
-        max_delay = 30.0
-        timeout_seconds = 60.0
+        max_retries = self.retry_config['max_retries']
+        base_delay = self.retry_config['base_delay']
+        max_delay = self.retry_config['max_delay']
+        timeout_seconds = self.retry_config['timeout_seconds']
         
         chat_id_display = chat_id[-8:] if chat_id and len(chat_id) > 8 else chat_id or "unknown"
         
@@ -557,6 +583,135 @@ class LLMProcessor:
             return {"llm_output": "(empty)", "error": "Empty response from LLM"}
         
         return {"llm_output": result}
+    
+    async def _analyze_with_anthropic_with_retry(self, conversation, prompt, chat_id=None):
+        """Wrapper for Anthropic API calls with retry logic and doubled tokens on retry"""
+        max_retries = self.retry_config['max_retries']
+        base_delay = self.retry_config['base_delay']
+        max_delay = self.retry_config['max_delay']
+        timeout_seconds = self.retry_config['timeout_seconds']
+        
+        chat_id_display = chat_id[-8:] if chat_id and len(chat_id) > 8 else chat_id or "unknown"
+        
+        for attempt in range(max_retries):
+            try:
+                # Use asyncio timeout for each attempt
+                async with asyncio.timeout(timeout_seconds):
+                    # Double tokens on retry (attempt 0 = normal, attempt 1+ = doubled)
+                    token_multiplier = 2 if attempt > 0 else 1
+                    
+                    if attempt > 0:
+                        print(f"🔄 Retry {attempt}/{max_retries - 1} with {token_multiplier}x tokens ({self.get_max_tokens(token_multiplier):,} tokens)")
+                    
+                    result = await self._analyze_with_anthropic(conversation, prompt, chat_id, retry_attempt=attempt)
+                    
+                # If successful, return the result
+                if result and not result.get("error"):
+                    return result
+                    
+                # If empty response but no error, still consider it a success
+                if result and result.get("llm_output") == "(empty)":
+                    return result
+                    
+            except asyncio.TimeoutError:
+                if attempt < max_retries - 1:
+                    # Calculate exponential backoff with jitter
+                    delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
+                    print(f"⏱️  Timeout for {chat_id_display} (attempt {attempt + 1}/{max_retries}). Retrying in {delay:.1f}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    print(f"❌ Timeout for {chat_id_display} after {max_retries} attempts")
+                    return {"llm_output": "", "error": f"Timeout after {max_retries} attempts"}
+                    
+            except Exception as e:
+                error_msg = str(e)
+                
+                # Check if it's a rate limit error
+                is_rate_limit = any(phrase in error_msg.lower() for phrase in [
+                    "rate limit", "rate_limit", "429", "too many requests", "ratelimiterror"
+                ])
+                
+                # Check if it's a server error that might be transient
+                is_server_error = any(phrase in error_msg.lower() for phrase in [
+                    "500", "502", "503", "504", "server error", "internal server error", "apistatusererror"
+                ])
+                
+                if attempt < max_retries - 1 and (is_rate_limit or is_server_error):
+                    # Calculate exponential backoff with jitter
+                    delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
+                    
+                    # For rate limits, use a longer delay
+                    if is_rate_limit:
+                        delay = max(delay, 5.0)  # At least 5 seconds for rate limits
+                    
+                    print(f"⚠️  Anthropic error for {chat_id_display}: {error_msg[:100]}...")
+                    print(f"🔄 Retrying (attempt {attempt + 1}/{max_retries}) in {delay:.1f}s...")
+                    
+                    await asyncio.sleep(delay)
+                else:
+                    # Final attempt failed or non-retryable error
+                    print(f"❌ Anthropic error for {chat_id_display} after {attempt + 1} attempts: {error_msg[:100]}...")
+                    return {"llm_output": "", "error": f"Anthropic error after {attempt + 1} attempts: {error_msg}"}
+        
+        # Should not reach here, but just in case
+        return {"llm_output": "", "error": f"Failed after {max_retries} attempts"}
+    
+    async def _analyze_with_anthropic(self, conversation, prompt, chat_id=None, retry_attempt=0):
+        """Analyze conversation using Anthropic Claude"""
+        # Double tokens on retry (attempt 0 = normal, attempt 1+ = doubled)
+        token_multiplier = 2 if retry_attempt > 0 else 1
+        max_tokens = self.get_max_tokens(token_multiplier)
+        
+        try:
+            # Create the message for Anthropic
+            response = await self.anthropic_client.messages.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                temperature=self.model_config.get("temperature", 0.0),
+                system=str(prompt),
+                messages=[
+                    {"role": "user", "content": str(conversation)}
+                ]
+            )
+            
+            # Extract the result
+            result = response.content[0].text if response.content else ""
+            
+            # Track token usage for Anthropic
+            if hasattr(response, 'usage'):
+                from datetime import datetime
+                timestamp = datetime.now().strftime('%H:%M:%S')
+                input_tokens = response.usage.input_tokens
+                output_tokens = response.usage.output_tokens
+                total_tokens = input_tokens + output_tokens
+                
+                # Accumulate tokens
+                self.token_usage['total_input_tokens'] += input_tokens
+                self.token_usage['total_output_tokens'] += output_tokens
+                self.token_usage['total_tokens'] += total_tokens
+                self.token_usage['conversations_processed'] += 1
+                
+                chat_id_display = chat_id[-8:] if chat_id and len(chat_id) > 8 else chat_id or "unknown"
+                print(f"🤖 {timestamp} {chat_id_display}: {total_tokens}t ({input_tokens}→{output_tokens})")
+            
+            if result:
+                result = result.strip()
+            else:
+                result = ""
+            
+            # Return raw result
+            if not result:
+                chat_id_display = chat_id[-8:] if chat_id and len(chat_id) > 8 else chat_id or "unknown"
+                print(f"⚠️  Empty response from Anthropic for {chat_id_display}")
+                return {"llm_output": "(empty)", "error": "Empty response from LLM"}
+            
+            return {"llm_output": result}
+            
+        except Exception as e:
+            error_msg = str(e)
+            chat_id_display = chat_id[-8:] if chat_id and len(chat_id) > 8 else chat_id or "unknown"
+            print(f"❌ Anthropic API error for {chat_id_display}: {error_msg[:100]}...")
+            return {"llm_output": "", "error": f"Anthropic error: {error_msg}"}
         
     async def process_conversations(self, conversations: List[Dict], prompt_text: str) -> List[Dict]:
         """Process conversations through LLM with concurrency control"""

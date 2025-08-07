@@ -9,12 +9,14 @@ Outputs: Clean CSV with columns:
 - Count: Number of conversations in this category
 - Category %: Percentage of all chats that belong to this category
 - Coverage Per Category %: Percentage of chats IN THIS CATEGORY that were handled by bot
-- Intervention By Agent %: Percentage of ALL chats that had intervention in this category
-- Transferred by Bot %: Percentage of ALL chats that were transferred in this category
+- Intervention By Agent %: Percentage of ALL chats where THIS CATEGORY caused an intervention
+- Transferred by Bot %: Percentage of ALL chats where THIS CATEGORY caused a transfer
 - %AllChatsNotHandled: Sum of Intervention + Transfer percentages (all relative to total chats)
 
 Note: All percentages except "Coverage Per Category %" are calculated relative to TOTAL chats.
       "Coverage Per Category %" is calculated relative to the category's count.
+      Interventions and Transfers are only counted for the specific category that caused them.
+      A chat with multiple categories may have different handling status for each category.
 (Sorted by Count, descending)
 """
 
@@ -217,9 +219,19 @@ class CategorizingProcessor:
             category_pct = (category_count / total_chats * 100) if total_chats > 0 else 0
             
             # Count by intervention/transfer status for this category
-            chats_handled_by_bot = sum(1 for chat in chats_with_category if chat['intervention_or_transfer'] == 'N/A')
-            chats_intervention = sum(1 for chat in chats_with_category if chat['intervention_or_transfer'] == 'Intervention')
-            chats_transfer = sum(1 for chat in chats_with_category if chat['intervention_or_transfer'] == 'Transfer')
+            # Only count interventions/transfers if this specific category caused them
+            chats_intervention = sum(1 for chat in chats_with_category 
+                                   if chat['intervention_or_transfer'] == 'Intervention' 
+                                   and chat['category_causing_intervention_transfer'] == category)
+            chats_transfer = sum(1 for chat in chats_with_category 
+                               if chat['intervention_or_transfer'] == 'Transfer' 
+                               and chat['category_causing_intervention_transfer'] == category)
+            
+            # For bot-handled chats: count those with N/A OR those with intervention/transfer NOT caused by this category
+            chats_handled_by_bot = sum(1 for chat in chats_with_category 
+                                     if chat['intervention_or_transfer'] == 'N/A' 
+                                     or (chat['intervention_or_transfer'] in ['Intervention', 'Transfer'] 
+                                         and chat['category_causing_intervention_transfer'] != category))
             
             # Calculate coverage percentage relative to category count, others relative to total chats
             coverage_per_category_pct = (chats_handled_by_bot / category_count * 100) if category_count > 0 else 0
@@ -250,6 +262,7 @@ class CategorizingProcessor:
             summary_df = summary_df.sort_values('Count', ascending=False)
         
         # Add Total row with overall intervention/transfer percentages
+        # Count unique chats (not double-counting across categories)
         total_intervention = sum(1 for _, row in results_df.iterrows() if row['intervention_or_transfer'] == 'Intervention')
         total_transfer = sum(1 for _, row in results_df.iterrows() if row['intervention_or_transfer'] == 'Transfer')
         total_na = sum(1 for _, row in results_df.iterrows() if row['intervention_or_transfer'] == 'N/A')
@@ -287,9 +300,9 @@ class CategorizingProcessor:
             print(f"\nTop categories by volume:")
             for i, row in summary_df.head(5).iterrows():
                 print(f"  {i+1}. {row['Category']}: {row['Count']} chats ({row['Category %']} of all chats)")
-                print(f"      Bot handled: {row['Coverage Per Category %']} of all chats")
-                print(f"      Intervention: {row['Intervention By Agent %']} of all chats")  
-                print(f"      Transfer: {row['Transferred by Bot %']} of all chats")
+                print(f"      Bot handled: {row['Coverage Per Category %']} of this category")
+                print(f"      Intervention caused by this category: {row['Intervention By Agent %']} of all chats")  
+                print(f"      Transfer caused by this category: {row['Transferred by Bot %']} of all chats")
         
         # Show overall intervention/transfer split
         int_counts = results_df['intervention_or_transfer'].value_counts()

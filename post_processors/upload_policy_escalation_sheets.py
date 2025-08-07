@@ -292,37 +292,39 @@ class PolicyEscalationUploader:
         
         # Find Policy Escalation LLM output files
         policy_escalation_files = []
-        department_found = None
         for filename in os.listdir(llm_outputs_dir):
             if filename.startswith('policy_escalation_') and filename.endswith(f'_{date_str}.csv'):
                 filepath = os.path.join(llm_outputs_dir, filename)
                 policy_escalation_files.append(filepath)
-                
-                # Extract department from filename
-                if 'doctors' in filename.lower():
-                    department_found = 'doctors'
-                elif 'mv_resolvers' in filename.lower():
-                    department_found = 'mv_resolvers'
         
         if not policy_escalation_files:
             print(f"❌ No Policy Escalation files found in {llm_outputs_dir}")
             return False
         
-        # Set the appropriate sheet ID based on department found
-        if department_found and department_found in self.policy_escalation_sheet_ids:
-            self.policy_escalation_sheet_id = self.policy_escalation_sheet_ids[department_found]
-            print(f"✅ Using sheet ID for {department_found}: {self.policy_escalation_sheet_id}")
-        else:
-            print(f"❌ Could not determine department from files. Found files: {[os.path.basename(f) for f in policy_escalation_files]}")
-            return False
-        
         # Process each file and upload to separate sheets
         success_count = 0
+        uploaded_departments = []  # Track which departments were uploaded for summary
+        
         for filepath in policy_escalation_files:
             filename = os.path.basename(filepath)
             print(f"📁 Processing Policy Escalation file: {filename}")
             
-            # Extract department name for sheet naming
+            # Determine department and sheet ID for this specific file
+            department_key = None
+            if 'doctors' in filename.lower():
+                department_key = 'doctors'
+            elif 'mv_resolvers' in filename.lower():
+                department_key = 'mv_resolvers'
+            
+            if not department_key or department_key not in self.policy_escalation_sheet_ids:
+                print(f"⚠️ Could not determine department for file: {filename}")
+                continue
+                
+            # Set the sheet ID for this specific file
+            current_sheet_id = self.policy_escalation_sheet_ids[department_key]
+            print(f"✅ Using sheet ID for {department_key}: {current_sheet_id}")
+            
+            # Extract department name for display
             import re
             dept_match = re.match(r'policy_escalation_(.+)_\d{2}_\d{2}\.csv$', filename)
             if dept_match:
@@ -342,19 +344,23 @@ class PolicyEscalationUploader:
             dept_sheet_name = sheet_name
             
             # Create new sheet
-            if self.create_new_sheet(self.policy_escalation_sheet_id, dept_sheet_name):
+            if self.create_new_sheet(current_sheet_id, dept_sheet_name):
                 # Upload data
-                if self.upload_data_to_sheet(filepath, self.policy_escalation_sheet_id, dept_sheet_name):
+                if self.upload_data_to_sheet(filepath, current_sheet_id, dept_sheet_name):
                     print(f"✅ Successfully uploaded Policy Escalation data for {dept_name} to sheet {dept_sheet_name}")
                     success_count += 1
+                    uploaded_departments.append((department_key, current_sheet_id))
         
         if success_count > 0:
             print(f"✅ Successfully uploaded {success_count} Policy Escalation files")
             
-            # Now process and upload policy frequency analysis summary
-            self.process_frequency_analysis(date_folder, date_str)
+            # Process frequency analysis for each uploaded department
+            for dept_key, sheet_id in uploaded_departments:
+                self.policy_escalation_sheet_id = sheet_id  # Set for this department's summary
+                print(f"\n📊 Processing frequency analysis for {dept_key}...")
+                self.process_frequency_analysis(date_folder, date_str)
+                print(f"📋 {dept_key.title()} Sheet URL: https://docs.google.com/spreadsheets/d/{sheet_id}")
             
-            print(f"📋 Sheet URL: https://docs.google.com/spreadsheets/d/{self.policy_escalation_sheet_id}")
             return True
         else:
             print(f"❌ No files were successfully uploaded")

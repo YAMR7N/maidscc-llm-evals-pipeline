@@ -1,6 +1,6 @@
 # LLM-as-a-Judge Pipeline
 
-A prompt-agnostic pipeline for automated chatbot conversation analysis using LLMs. This system provides a unified interface for running various analytical prompts across departments with support for multiple LLM providers (OpenAI and Gemini) and flexible data formats.
+A prompt-agnostic pipeline for automated chatbot conversation analysis using LLMs. This system provides a unified interface for running various analytical prompts across departments with support for multiple LLM providers (OpenAI, Gemini, and Anthropic) and flexible data formats.
 
 ## 🔧 Important Modules
 
@@ -161,6 +161,48 @@ Universal entry point for all pipeline operations.
 - Uploads raw LLM output spreadsheets to Google Sheets
 - Generates and uploads summary/snapshot spreadsheets for each department
 - Essential for dashboard integration and reporting
+
+## 🔧 Configuration
+
+### Environment Variables
+
+Create a `.env` file in the project root with the following variables:
+
+```bash
+# LLM Provider API Keys
+OPENAI_API_KEY=your-openai-api-key
+GEMINI_API_KEY=your-gemini-api-key
+ANTHROPIC_API_KEY=your-anthropic-api-key  # Required for Claude models
+
+# Google Sheets API (for upload functionality)
+GOOGLE_APPLICATION_CREDENTIALS=path/to/credentials.json
+
+# Optional: Tableau credentials (if using automatic download)
+TABLEAU_USERNAME=your-username
+TABLEAU_PASSWORD=your-password
+```
+
+### Supported Models
+
+The pipeline supports models from three providers:
+
+**OpenAI:**
+- `gpt-4o` (16K tokens)
+- `gpt-4o-mini` (16K tokens)
+- `o4-mini` (30K tokens)
+
+**Gemini:**
+- `gemini-1.5-pro` (20K tokens)
+- `gemini-1.5-flash` (20K tokens)
+- `gemini-2.0-flash-exp` (20K tokens)
+- `gemini-2.5-pro` (20K tokens)
+- `gemini-2.5-flash` (20K tokens)
+
+**Anthropic:**
+- `claude-3-opus-20240229` (4K tokens)
+- `claude-3-sonnet-20240229` (4K tokens)
+- `claude-3-haiku-20240307` (4K tokens)
+- `claude-3-5-sonnet-20241022` (4K tokens)
 
 ## 📊 Prompt Breakdown
 

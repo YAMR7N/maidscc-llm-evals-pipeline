@@ -2,7 +2,7 @@
 
 ## Overview
 
-The LLM Judge Pipeline now includes a robust retry mechanism for both Gemini and OpenAI API calls to handle transient failures, timeouts, and rate limiting. This ensures maximum reliability when processing conversations through any LLM model.
+The LLM Judge Pipeline now includes a robust retry mechanism for OpenAI, Gemini, and Anthropic API calls to handle transient failures, timeouts, and rate limiting. This ensures maximum reliability when processing conversations through any LLM model.
 
 ## Features
 
@@ -22,7 +22,7 @@ You can configure retry behavior per model in `config/settings.py`. The same con
 "gemini-1.5-pro": {
     "provider": "gemini", 
     "temperature": 0.0,
-    "max_retries": 3,        # Maximum retry attempts (default: 3)
+    "max_retries": 6,        # Maximum retry attempts (default: 6)
     "base_delay": 1.0,       # Base delay in seconds (default: 1.0)
     "max_delay": 30.0,       # Maximum delay in seconds (default: 30.0)
     "timeout_seconds": 60.0  # Timeout per attempt in seconds (default: 60.0)
@@ -32,9 +32,17 @@ You can configure retry behavior per model in `config/settings.py`. The same con
 "gpt-4o": {
     "provider": "openai",
     "temperature": 0.0,
-    "max_retries": 5,        # More retries for critical processes
+    "max_retries": 10,        # More retries for critical processes
     "base_delay": 2.0,       # Longer initial delay
     "timeout_seconds": 90.0  # Longer timeout for complex prompts
+}
+
+# Anthropic example
+"claude-3-5-sonnet-20241022": {
+    "provider": "anthropic",
+    "temperature": 0.0,
+    "max_retries": 10,
+    "timeout_seconds": 90.0
 }
 ```
 
@@ -63,6 +71,10 @@ The mechanism handles several types of errors for both providers:
 - **Rate Limits**: Keywords: "rate limit", "rate_limit", "429", "too many requests", "insufficient_quota"
 - **Server Errors**: Keywords: "internal server error", "server_error"
 
+### Anthropic-Specific
+- **Rate Limits**: Keywords: "rate limit", "ratelimiterror", "429", "too many requests"
+- **Server Errors**: Keywords: "apistatusererror", "internal server error"
+
 ## Logging
 
 The retry mechanism provides detailed logging:
@@ -75,11 +87,11 @@ The retry mechanism provides detailed logging:
 ## Example Output
 
 ```
-⏱️  Timeout for ABC12345 (attempt 1/3). Retrying in 1.7s...
-🔄 Retry 1/2 with 2x tokens (40,000 tokens)
+⏱️  Timeout for ABC12345 (attempt 1/6). Retrying in 1.7s...
+🔄 Retry 1/5 with 2x tokens (40,000 tokens)
 ⚠️  Gemini error for XYZ67890: 429 Resource has been exhausted (e.g. check quota)...
-🔄 Retrying (attempt 2/5) in 5.3s...
-❌ Gemini error for DEF34567 after 3 attempts: 503 Service Unavailable...
+🔄 Retrying (attempt 2/6) in 5.3s...
+❌ Gemini error for DEF34567 after 6 attempts: 503 Service Unavailable...
 ```
 
 ## Token Doubling Feature
@@ -100,6 +112,10 @@ The retry mechanism automatically doubles the maximum token limit on retry attem
 | gemini-1.5-pro | 20,000 | 40,000 |
 | gemini-1.5-flash | 20,000 | 40,000 |
 | gemini-2.0-flash-exp | 20,000 | 40,000 |
+| claude-3-opus | 4,096 | 8,192 |
+| claude-3-sonnet | 4,096 | 8,192 |
+| claude-3-haiku | 4,096 | 8,192 |
+| claude-3.5-sonnet | 4,096 | 8,192 |
 
 ## Performance Considerations
 
@@ -119,8 +135,10 @@ The retry mechanism automatically doubles the maximum token limit on retry attem
 
 The retry logic is implemented in:
 - `scripts/run_pipeline.py`: 
-  - `_analyze_with_gemini_with_retry()` method for Gemini
   - `_analyze_with_openai_with_retry()` method for OpenAI
+  - `_analyze_with_gemini_with_retry()` method for Gemini
+  - `_analyze_with_anthropic_with_retry()` method for Anthropic
 - Configuration in `config/settings.py`
 - Maintains compatibility with existing concurrent processing
 - Retry configuration is stored in `self.retry_config` for each LLMProcessor instance
+- Anthropic support requires `ANTHROPIC_API_KEY` environment variable

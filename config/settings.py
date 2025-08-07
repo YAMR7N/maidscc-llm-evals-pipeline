@@ -3,14 +3,20 @@ import os
 from pathlib import Path
 
 MODELS = {
-    "gpt-4o": {"provider": "openai", "temperature": 0.0},
+    "gpt-4o": {
+        "provider": "openai", 
+        "temperature": 0.0,
+        # Increased timeout for FTR's XML3D format
+        "timeout_seconds": 120.0,
+        "max_retries": 8
+    },
     "o4-mini": {"provider": "openai", "temperature": 0.0},
     "gpt-4o-mini": {"provider": "openai", "temperature": 0.0},
     "gemini-1.5-pro": {
         "provider": "gemini", 
         "temperature": 0.0,
         # Retry configuration (optional - defaults shown)
-        "max_retries": 3,
+        "max_retries": 6,
         "base_delay": 1.0,
         "max_delay": 30.0,
         "timeout_seconds": 60.0
@@ -24,7 +30,7 @@ MODELS = {
         "provider": "gemini", 
         "temperature": 0.0,
         # Example of more aggressive retry settings
-        "max_retries": 5,
+        "max_retries": 10,
         "base_delay": 2.0,
         "timeout_seconds": 90.0
     },
@@ -35,6 +41,29 @@ MODELS = {
         "top_p": 1.0,
         "top_k": 40,
         "enable_thinking": False
+    },
+    # Anthropic models
+    "claude-3-opus-20240229": {
+        "provider": "anthropic",
+        "temperature": 0.0,
+        "max_retries": 6,
+        "base_delay": 1.0,
+        "max_delay": 30.0,
+        "timeout_seconds": 60.0
+    },
+    "claude-3-sonnet-20240229": {
+        "provider": "anthropic",
+        "temperature": 0.0
+    },
+    "claude-3-haiku-20240307": {
+        "provider": "anthropic",
+        "temperature": 0.0
+    },
+    "claude-3-5-sonnet-20241022": {
+        "provider": "anthropic",
+        "temperature": 0.0,
+        "max_retries": 10,  # More retries for the newest model
+        "timeout_seconds": 90.0
     }
 }
 
