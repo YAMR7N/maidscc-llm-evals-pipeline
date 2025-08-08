@@ -713,7 +713,7 @@ class LLMProcessor:
             print(f"❌ Anthropic API error for {chat_id_display}: {error_msg[:100]}...")
             return {"llm_output": "", "error": f"Anthropic error: {error_msg}"}
         
-    async def process_conversations(self, conversations: List[Dict], prompt_text: str, max_concurrent: int = 30) -> List[Dict]:
+    async def process_conversations(self, conversations: List[Dict], prompt_text: str, max_concurrent: int = 30, replace_last_skill: bool = False) -> List[Dict]:
         """Process conversations through LLM with concurrency control"""
         # Create semaphore for concurrency control
         # Default is 30, but can be reduced for heavy workloads like FTR
@@ -725,6 +725,8 @@ class LLMProcessor:
         conversation_data = []
         
         for conv in conversations:
+            # Default prompt per conversation
+            final_prompt_text = prompt_text
             # Format conversation for prompt
             if isinstance(conv, dict) and 'Messages' in conv:
                 # Segmented format
@@ -750,22 +752,19 @@ class LLMProcessor:
                 conversation_text = conv['content_xml_view']
                 chat_id = conv.get('conversation_id', conv.get('customer_name', 'unknown'))
                 customer_name = conv.get('customer_name', 'unknown')
-                # Inject last skill into prompt if available
-                if 'unique_skills' in conv and isinstance(prompt_text, str) and '@LastSkill@' in prompt_text:
+                # Inject last skill into prompt ONLY when enabled
+                if replace_last_skill and 'unique_skills' in conv and isinstance(prompt_text, str) and '@LastSkill@' in prompt_text:
                     try:
                         skills_str = str(conv.get('unique_skills', '') or '')
                         last_skill = skills_str.split(',')[-1].strip() if skills_str else ''
                         final_prompt_text = prompt_text.replace('@LastSkill@', last_skill or 'N/A')
                     except Exception:
                         final_prompt_text = prompt_text.replace('@LastSkill@', 'N/A')
-                else:
-                    final_prompt_text = prompt_text
             else:
                 # Transparent format or other
                 conversation_text = str(conv)
                 chat_id = conv.get('conversation ID', conv.get('Conversation ID', 'unknown'))
                 customer_name = 'unknown'
-                final_prompt_text = prompt_text
             
             # Create async task for this conversation
             task = self.analyze_conversation(conversation_text, final_prompt_text, semaphore, chat_id)
@@ -1030,10 +1029,10 @@ def load_preprocessed_data(file_path: str, format_type: str) -> List[Dict]:
         df = pd.read_csv(file_path)
         return df.to_dict('records')
 
-async def run_llm_processing(conversations: List[Dict], prompt_text: str, model: str, max_concurrent: int = 30) -> tuple[List[Dict], LLMProcessor]:
+async def run_llm_processing(conversations: List[Dict], prompt_text: str, model: str, max_concurrent: int = 30, replace_last_skill: bool = False) -> tuple[List[Dict], LLMProcessor]:
     """Run conversations through LLM and return results with processor for token tracking"""
     processor = LLMProcessor(model)
-    results = await processor.process_conversations(conversations, prompt_text, max_concurrent)
+    results = await processor.process_conversations(conversations, prompt_text, max_concurrent, replace_last_skill)
     return results, processor
 
 def check_llm_output_exists(department: str, prompt_type: str, target_date: datetime = None) -> bool:
@@ -2646,7 +2645,8 @@ def run_tool_calling_analysis(departments, model, format_type, with_upload=False
                 continue
 
             # Step 4: Process through LLM (standard concurrency)
-            results, processor = asyncio.run(run_llm_processing(conversations, prompt_text, model))
+            # Enable @LastSkill@ replacement only for tool_calling
+            results, processor = asyncio.run(run_llm_processing(conversations, prompt_text, model, 30, replace_last_skill=True))
 
             # Step 5: Save outputs
             save_llm_outputs(results, department, "tool_calling", target_date)
