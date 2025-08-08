@@ -23,6 +23,7 @@ echo "  threatening        Run threatening analysis (gemini-2.5-pro, segmented)"
 echo "  misprescription    Run misprescription analysis (gemini-2.5-flash, depends on categorizing)"
 echo "  unnecessary_clinic_rec Run unnecessary clinic rec analysis (gemini-2.5-flash, depends on categorizing)"
 echo "  loss_of_interest   Run loss of interest analysis (gemini-2.5-pro, xml)"
+echo "  tool_calling       Run tool-calling evaluation (gemini-2.5-pro, xml)"
     echo ""
     echo "Options:"
     echo "  --departments DEPTS    Comma-separated departments or 'all'"
@@ -58,7 +59,7 @@ DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        sa|rb|ftr|false_promises|categorizing|policy_escalation|client_suspecting_ai|clarity_score|legal_alignment|call_request|threatening|misprescription|unnecessary_clinic_rec|loss_of_interest) COMMAND="$1"; shift ;;
+        sa|rb|ftr|false_promises|categorizing|policy_escalation|client_suspecting_ai|clarity_score|legal_alignment|call_request|threatening|misprescription|unnecessary_clinic_rec|loss_of_interest|tool_calling) COMMAND="$1"; shift ;;
         --departments) DEPARTMENTS="$2"; shift 2 ;;
         --model) MODEL="$2"; shift 2 ;;
         --format) FORMAT="$2"; shift 2 ;;
@@ -89,7 +90,8 @@ case $COMMAND in
     threatening) PROMPT="threatening"; MODEL="${MODEL:-gemini-2.5-pro}"; FORMAT="${FORMAT:-segmented}" ;;
 misprescription) PROMPT="misprescription"; MODEL="${MODEL:-gemini-2.5-flash}"; FORMAT="${FORMAT:-xml}" ;;
 unnecessary_clinic_rec) PROMPT="unnecessary_clinic_rec"; MODEL="${MODEL:-gemini-2.5-flash}"; FORMAT="${FORMAT:-xml}" ;;
-loss_of_interest) PROMPT="loss_of_interest"; MODEL="${MODEL:-gemini-2.5-pro}"; FORMAT="${FORMAT:-xml}" ;;
+    loss_of_interest) PROMPT="loss_of_interest"; MODEL="${MODEL:-gemini-2.5-pro}"; FORMAT="${FORMAT:-xml}" ;;
+    tool_calling) PROMPT="tool_calling"; MODEL="${MODEL:-gemini-2.5-pro}"; FORMAT="${FORMAT:-xml}" ;;
 esac
 
 CMD="python3 scripts/run_pipeline.py --prompt $PROMPT --departments \"$DEPARTMENTS\" --format $FORMAT --model $MODEL"
