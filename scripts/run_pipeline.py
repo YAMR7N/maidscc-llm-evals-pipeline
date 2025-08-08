@@ -909,7 +909,7 @@ def preprocess_data(raw_file: str, department: str, format_type: str, filter_age
     """
     
     # Check if preprocessing output already exists (caching)
-    if check_preprocessed_output_exists(department, format_type, target_date):
+    if check_preprocessed_output_exists(department, format_type, target_date, include_all_skills=include_all_skills):
         if target_date is None:
             target_date = datetime.now() - timedelta(days=1)
         date_folder = target_date.strftime('%Y-%m-%d')
@@ -922,7 +922,7 @@ def preprocess_data(raw_file: str, department: str, format_type: str, filter_age
         elif format_type == "transparent":
             filename = f"{department}_transparent.csv"
         elif format_type == "xml":
-            filename = f"{department}_xml.csv"
+            filename = f"{department}_xml{'_all' if include_all_skills else ''}.csv"
         elif format_type == "xml3d":
             filename = f"{department}_xml3d.csv"
         
@@ -975,7 +975,7 @@ def preprocess_data(raw_file: str, department: str, format_type: str, filter_age
             
         elif format_type == "xml":
             from utils.xml_processor import create_xml_view
-            output_file = f"{preprocessing_dir}/{department}_xml.csv"
+            output_file = f"{preprocessing_dir}/{department}_xml{'_all' if include_all_skills else ''}.csv"
             create_xml_view(cleaned_file, output_file, target_skills)
             
         elif format_type == "xml3d":
@@ -1069,7 +1069,7 @@ def check_llm_output_exists(department: str, prompt_type: str, target_date: date
     
     return False
 
-def check_preprocessed_output_exists(department: str, format_type: str, target_date: datetime = None) -> bool:
+def check_preprocessed_output_exists(department: str, format_type: str, target_date: datetime = None, include_all_skills: bool = False) -> bool:
     """Check if preprocessed output already exists for a department and date"""
     if target_date is None:
         target_date = datetime.now() - timedelta(days=1)
@@ -1083,7 +1083,7 @@ def check_preprocessed_output_exists(department: str, format_type: str, target_d
     elif format_type == "transparent":
         filename = f"{department}_transparent.csv"
     elif format_type == "xml":
-        filename = f"{department}_xml.csv"
+        filename = f"{department}_xml{'_all' if include_all_skills else ''}.csv"
     elif format_type == "xml3d":
         filename = f"{department}_xml3d.csv"
     else:
@@ -2790,9 +2790,9 @@ def run_loss_of_interest(departments, model, format_type, with_upload=False, dry
                     print(f"⚡ Skipping LLM processing for {department} - using cached results")
                     continue
                 
-                # Download and preprocess (include all skills for loss_of_interest)
+                # Download and preprocess (STRICTLY filter to department skills)
                 raw_file = download_tableau_data(department, days_lookback=1, target_date=target_date)
-                processed_file = preprocess_data(raw_file, department, format_type, target_date=target_date, include_all_skills=True)
+                processed_file = preprocess_data(raw_file, department, format_type, target_date=target_date, include_all_skills=False)
                 
                 # Load preprocessed data
                 conversations = load_preprocessed_data(processed_file, format_type)

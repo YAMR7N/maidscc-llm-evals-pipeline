@@ -91,7 +91,7 @@ case $COMMAND in
 misprescription) PROMPT="misprescription"; MODEL="${MODEL:-gemini-2.5-flash}"; FORMAT="${FORMAT:-xml}" ;;
 unnecessary_clinic_rec) PROMPT="unnecessary_clinic_rec"; MODEL="${MODEL:-gemini-2.5-flash}"; FORMAT="${FORMAT:-xml}" ;;
     loss_of_interest) PROMPT="loss_of_interest"; MODEL="${MODEL:-gemini-2.5-pro}"; FORMAT="${FORMAT:-xml}" ;;
-    tool_calling) PROMPT="tool_calling"; MODEL="${MODEL:-gemini-2.5-pro}"; FORMAT="${FORMAT:-xml}" ;;
+    tool_calling) PROMPT="tool_calling"; MODEL="${MODEL:-gemini-2.5-flash}"; FORMAT="${FORMAT:-xml}" ;;
 esac
 
 CMD="python3 scripts/run_pipeline.py --prompt $PROMPT --departments \"$DEPARTMENTS\" --format $FORMAT --model $MODEL"
