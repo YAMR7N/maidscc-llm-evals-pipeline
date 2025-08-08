@@ -146,7 +146,10 @@ def convert_conversation_to_xml(csv_path, target_skills=None):
         if not include_all:
             skills_series = conv_messages['Skill'].fillna('')
             skills = list(set(skills_series.tolist()))
-            if not any(skill in target_skills for skill in skills):
+            # Case-insensitive skill matching
+            skills_lower = [skill.lower() for skill in skills if skill]
+            target_skills_lower = [ts.lower() for ts in target_skills if ts]
+            if not any(skill in target_skills_lower for skill in skills_lower):
                 continue
 
         # Get unique participants

@@ -238,7 +238,10 @@ def preprocess_conversations(df, target_skills):
     for conv_id in df['Conversation ID'].unique():
         conv_messages = df[df['Conversation ID'] == conv_id]
         skills_in_conv = conv_messages['Skill'].fillna('').tolist()
-        if any(skill in target_skills for skill in skills_in_conv):
+        # Case-insensitive skill matching
+        skills_lower = [skill.lower() for skill in skills_in_conv if skill]
+        target_skills_lower = [ts.lower() for ts in target_skills if ts]
+        if any(skill in target_skills_lower for skill in skills_lower):
             conversation_ids_with_target_skills.add(conv_id)
     
     # Keep all messages from conversations that contain target skills
@@ -278,7 +281,10 @@ def convert_conversations_to_xml3d(df, target_skills):
         # Check if conversation contains target skills
         skills_series = conv_messages['Skill'].fillna('')
         skills = list(set(skills_series.tolist()))
-        if not any(skill in target_skills for skill in skills):
+        # Case-insensitive skill matching
+        skills_lower = [skill.lower() for skill in skills if skill]
+        target_skills_lower = [ts.lower() for ts in target_skills if ts]
+        if not any(skill in target_skills_lower for skill in skills_lower):
             continue
         
         # Get unique participants

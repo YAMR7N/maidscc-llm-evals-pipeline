@@ -80,7 +80,10 @@ def process_conversations(input_csv, target_skills=["GPT_MAIDSAT_FILIPINA_OUTSID
     # Track conversations that contain target skills AND have bot messages
     target_skill_conversations = set()
     for conv_id, conv_data in df.groupby("Conversation ID"):
-        if conv_id in conversations_with_bot and any(skill in conv_data["Skill"].values for skill in target_skills):
+        # Case-insensitive skill matching
+        skills_in_conv = [str(skill).lower() for skill in conv_data["Skill"].values if pd.notna(skill)]
+        target_skills_lower = [ts.lower() for ts in target_skills if ts]
+        if conv_id in conversations_with_bot and any(skill in target_skills_lower for skill in skills_in_conv):
             target_skill_conversations.add(conv_id)
 
     logging.info(f"Found {len(target_skill_conversations)} conversations with target skills and bot messages")
