@@ -183,7 +183,7 @@ class LLMProcessor:
                 base_tokens = 4096  # Sonnet also has 4k output limit
             elif "haiku" in self.model:
                 base_tokens = 4096  # Haiku also has 4k output limit
-            else:
+        else:
                 base_tokens = 4096  # Default for Anthropic
         
         # Apply retry multiplier
@@ -583,7 +583,7 @@ class LLMProcessor:
             return {"llm_output": "(empty)", "error": "Empty response from LLM"}
         
         return {"llm_output": result}
-    
+        
     async def _analyze_with_anthropic_with_retry(self, conversation, prompt, chat_id=None):
         """Wrapper for Anthropic API calls with retry logic and doubled tokens on retry"""
         max_retries = self.retry_config['max_retries']
@@ -713,11 +713,12 @@ class LLMProcessor:
             print(f"❌ Anthropic API error for {chat_id_display}: {error_msg[:100]}...")
             return {"llm_output": "", "error": f"Anthropic error: {error_msg}"}
         
-    async def process_conversations(self, conversations: List[Dict], prompt_text: str) -> List[Dict]:
+    async def process_conversations(self, conversations: List[Dict], prompt_text: str, max_concurrent: int = 30) -> List[Dict]:
         """Process conversations through LLM with concurrency control"""
         # Create semaphore for concurrency control
-        # Reduced from 40 to 30 when running multiple concurrent pipelines
-        semaphore = asyncio.Semaphore(30)
+        # Default is 30, but can be reduced for heavy workloads like FTR
+        semaphore = asyncio.Semaphore(max_concurrent)
+        print(f"🚦 Starting LLM processing with {max_concurrent} concurrent requests...")
         
         results = []
         tasks = []
@@ -1018,10 +1019,10 @@ def load_preprocessed_data(file_path: str, format_type: str) -> List[Dict]:
         df = pd.read_csv(file_path)
         return df.to_dict('records')
 
-async def run_llm_processing(conversations: List[Dict], prompt_text: str, model: str) -> tuple[List[Dict], LLMProcessor]:
+async def run_llm_processing(conversations: List[Dict], prompt_text: str, model: str, max_concurrent: int = 30) -> tuple[List[Dict], LLMProcessor]:
     """Run conversations through LLM and return results with processor for token tracking"""
     processor = LLMProcessor(model)
-    results = await processor.process_conversations(conversations, prompt_text)
+    results = await processor.process_conversations(conversations, prompt_text, max_concurrent)
     return results, processor
 
 def check_llm_output_exists(department: str, prompt_type: str, target_date: datetime = None) -> bool:
@@ -1481,7 +1482,10 @@ def run_ftr_analysis(departments, model, format_type, with_upload=False, dry_run
                     continue
                 
                 # Step 4: Process through LLM
-                results, processor = asyncio.run(run_llm_processing(conversations, prompt_text, model))
+                # Use reduced concurrency (10) for FTR's heavy XML3D format
+                max_concurrent = 10 if format_type == "xml3d" else 20
+                print(f"🔧 Using concurrency limit: {max_concurrent} (reduced for {format_type} format)")
+                results, processor = asyncio.run(run_llm_processing(conversations, prompt_text, model, max_concurrent))
                 
                 # Step 5: Save outputs
                 save_llm_outputs(results, department, "ftr")
