@@ -750,14 +750,25 @@ class LLMProcessor:
                 conversation_text = conv['content_xml_view']
                 chat_id = conv.get('conversation_id', conv.get('customer_name', 'unknown'))
                 customer_name = conv.get('customer_name', 'unknown')
+                # Inject last skill into prompt if available
+                if 'unique_skills' in conv and isinstance(prompt_text, str) and '@LastSkill@' in prompt_text:
+                    try:
+                        skills_str = str(conv.get('unique_skills', '') or '')
+                        last_skill = skills_str.split(',')[-1].strip() if skills_str else ''
+                        final_prompt_text = prompt_text.replace('@LastSkill@', last_skill or 'N/A')
+                    except Exception:
+                        final_prompt_text = prompt_text.replace('@LastSkill@', 'N/A')
+                else:
+                    final_prompt_text = prompt_text
             else:
                 # Transparent format or other
                 conversation_text = str(conv)
                 chat_id = conv.get('conversation ID', conv.get('Conversation ID', 'unknown'))
                 customer_name = 'unknown'
+                final_prompt_text = prompt_text
             
             # Create async task for this conversation
-            task = self.analyze_conversation(conversation_text, prompt_text, semaphore, chat_id)
+            task = self.analyze_conversation(conversation_text, final_prompt_text, semaphore, chat_id)
             tasks.append(task)
             conversation_data.append((chat_id, customer_name, conversation_text))
         
@@ -2590,6 +2601,64 @@ def run_threatening_analysis(departments, model, format_type, with_upload=False,
     if dry_run:
         print("🔍 DRY RUN - Would execute full Threatening pipeline")
         return True
+
+def run_tool_calling_analysis(departments, model, format_type, with_upload=False, dry_run=False, target_date=None):
+    """Run Tool Calling (Ghonaim) evaluation pipeline"""
+    print(f"🛠️  Running Tool Calling Analysis Pipeline")
+    print(f"   Departments: {departments}")
+    print(f"   Model: {model}")
+    print(f"   Format: {format_type}")
+
+    if dry_run:
+        print("🔍 DRY RUN - Would execute full Tool Calling pipeline")
+        return True
+
+    try:
+        # Get prompt
+        prompt_registry = PromptRegistry()
+        tool_prompt = prompt_registry.get_prompt("tool_calling")
+        prompt_text = tool_prompt.get_prompt_text()
+
+        # Determine departments to process
+        if departments == "all":
+            dept_list = list(DEPARTMENTS.keys())
+        else:
+            dept_list = [d.strip() for d in departments.split(',')]
+
+        print(f"🎯 Processing departments: {dept_list}")
+
+        for department in dept_list:
+            print(f"\n📂 Processing department: {department}")
+
+            # Step 1: Download from Tableau
+            raw_file = download_tableau_data(department, days_lookback=tool_prompt.get_days_lookback())
+
+            # Step 2: Preprocess data - force XML to include unique_skills
+            if format_type != "xml":
+                print("⚠️  Switching to XML format (required to access skills column)")
+                format_type = "xml"
+            processed_file = preprocess_data(raw_file, department, format_type)
+
+            # Step 3: Load preprocessed data
+            conversations = load_preprocessed_data(processed_file, format_type)
+            if not conversations:
+                print(f"⚠️  No conversations found for {department}")
+                continue
+
+            # Step 4: Process through LLM (standard concurrency)
+            results, processor = asyncio.run(run_llm_processing(conversations, prompt_text, model))
+
+            # Step 5: Save outputs
+            save_llm_outputs(results, department, "tool_calling", target_date)
+
+            # Display token usage
+            print(processor.get_token_summary(department))
+            print(f"✅ Completed {department}")
+
+        return True
+    except Exception as e:
+        print(f"❌ Tool Calling Pipeline failed: {str(e)}")
+        return False
     
     try:
         # Get prompt
@@ -2863,7 +2932,7 @@ def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(description='LLM-as-a-Judge Pipeline')
     parser.add_argument('--prompt', required=True, 
-                       choices=['sentiment_analysis', 'rule_breaking', 'ftr', 'false_promises', 'categorizing', 'policy_escalation', 'client_suspecting_ai', 'clarity_score', 'legal_alignment', 'call_request', 'threatening', 'misprescription', 'unnecessary_clinic_rec', 'loss_of_interest'],
+                       choices=['sentiment_analysis', 'rule_breaking', 'ftr', 'false_promises', 'categorizing', 'policy_escalation', 'client_suspecting_ai', 'clarity_score', 'legal_alignment', 'call_request', 'threatening', 'misprescription', 'unnecessary_clinic_rec', 'loss_of_interest', 'tool_calling'],
                        help='Type of analysis to run')
     parser.add_argument('--departments', default='all', 
                        help='Departments to process (comma-separated or "all")')
@@ -2993,6 +3062,11 @@ def main():
         )
     elif args.prompt == 'loss_of_interest':
         success = run_loss_of_interest(
+            args.departments, args.model, args.format,
+            args.with_upload, args.dry_run, target_date
+        )
+    elif args.prompt == 'tool_calling':
+        success = run_tool_calling_analysis(
             args.departments, args.model, args.format,
             args.with_upload, args.dry_run, target_date
         )

@@ -17,5 +17,6 @@ from . import category_docs
 from . import misprescription
 from . import unnecessary_clinic_rec
 from . import loss_of_interest
+from . import tool_calling
 
 __all__ = ['BasePrompt', 'PromptRegistry']
