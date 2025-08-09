@@ -205,6 +205,41 @@ class PolicyEscalationUploader:
         except Exception as e:
             print(f"❌ Error uploading DataFrame to {sheet_name}: {str(e)}")
             return False
+
+    def append_frequency_to_raw_sheet(self, date_folder: str, dept_name: str, spreadsheet_id: str, sheet_name: str) -> bool:
+        """Append the policy frequency summary table to the same raw data sheet (below LLM outputs)."""
+        try:
+            analysis_dir = f"outputs/policy_escalation/{date_folder}"
+            freq_path = os.path.join(analysis_dir, f"{dept_name}_Policy_Frequency_Analysis.csv")
+            if not os.path.exists(freq_path):
+                print(f"ℹ️ Frequency summary not found for {dept_name}: {freq_path}")
+                return False
+
+            df = pd.read_csv(freq_path)
+
+            # Prepare rows to append: blank line, title, header, rows
+            rows = [[""]]
+            rows.append(["Policy Frequency Analysis"])
+            # Clean values similar to upload_dataframe_to_sheet
+            headers = [self.clean_cell_value(col) for col in df.columns.tolist()]
+            rows.append(headers)
+            for _, r in df.iterrows():
+                cleaned = [self.clean_cell_value(val) for val in r.tolist()]
+                rows.append(cleaned)
+
+            self.service.spreadsheets().values().append(
+                spreadsheetId=spreadsheet_id,
+                range=f"{sheet_name}!A:A",
+                valueInputOption='RAW',
+                insertDataOption='INSERT_ROWS',
+                body={'values': rows}
+            ).execute()
+
+            print(f"✅ Appended policy frequency summary to sheet: {sheet_name}")
+            return True
+        except Exception as e:
+            print(f"❌ Error appending frequency summary to raw sheet: {str(e)}")
+            return False
     
     def process_frequency_analysis(self, date_folder, date_str, department_key=None):
         """Process and upload policy frequency analysis to summary sheet for a specific department"""
@@ -361,6 +396,9 @@ class PolicyEscalationUploader:
                     print(f"✅ Successfully uploaded Policy Escalation data for {dept_name} to sheet {dept_sheet_name}")
                     success_count += 1
                     uploaded_departments.append((department_key, current_sheet_id))
+
+                    # Also append the frequency analysis summary to the same sheet (below data)
+                    self.append_frequency_to_raw_sheet(date_folder, dept_name, current_sheet_id, dept_sheet_name)
         
         if success_count > 0:
             print(f"✅ Successfully uploaded {success_count} Policy Escalation files")

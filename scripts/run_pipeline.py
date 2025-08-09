@@ -1220,10 +1220,8 @@ def run_sentiment_analysis(departments, model, format_type, with_upload=False, d
                     print(f"⚠️  No conversations found for {department}")
                     continue
                 
-                # Step 4: Process through LLM with reduced concurrency for stability
-                max_concurrent = 10
-                print(f"🔧 Using concurrency limit: {max_concurrent} for client_suspecting_ai")
-                results, processor = asyncio.run(run_llm_processing(conversations, prompt_text, model, max_concurrent))
+                # Step 4: Process through LLM
+                results, processor = asyncio.run(run_llm_processing(conversations, prompt_text, model))
                 
                 # Step 5: Save outputs
                 save_llm_outputs(results, department, "sentiment_analysis", target_date)
@@ -1446,7 +1444,7 @@ def run_rule_breaking(departments, model, format_type, with_upload=False, dry_ru
         print(f"❌ Rule Breaking Pipeline failed: {str(e)}")
         return False
 
-def run_ftr_analysis(departments, model, format_type, with_upload=False, dry_run=False):
+def run_ftr_analysis(departments, model, format_type, with_upload=False, dry_run=False, max_concurrent_override: int | None = None):
     """Run complete FTR analysis pipeline"""
     print(f"📈 Running FTR Analysis Pipeline")
     print(f"   Departments: {departments}")
@@ -1494,10 +1492,11 @@ def run_ftr_analysis(departments, model, format_type, with_upload=False, dry_run
                     continue
                 
                 # Step 4: Process through LLM
-                # Use reduced concurrency (10) for FTR's heavy XML3D format
-                max_concurrent = 10 if format_type == "xml3d" else 20
-                print(f"🔧 Using concurrency limit: {max_concurrent} (reduced for {format_type} format)")
-                results, processor = asyncio.run(run_llm_processing(conversations, prompt_text, model, max_concurrent))
+                # Default reduced concurrency for XML3D unless overridden
+                default_conc = 10 if format_type == "xml3d" else 20
+                use_conc = max_concurrent_override if max_concurrent_override is not None else default_conc
+                print(f"🔧 Using concurrency limit: {use_conc}{' (override)' if max_concurrent_override is not None else ''}")
+                results, processor = asyncio.run(run_llm_processing(conversations, prompt_text, model, use_conc))
                 
                 # Step 5: Save outputs
                 save_llm_outputs(results, department, "ftr")
@@ -1916,7 +1915,7 @@ def run_policy_escalation_analysis(departments, model, format_type, with_upload=
         print(f"❌ Policy Escalation Pipeline failed: {str(e)}")
         return False
 
-def run_client_suspecting_ai_analysis(departments, model, format_type, with_upload=False, dry_run=False):
+def run_client_suspecting_ai_analysis(departments, model, format_type, with_upload=False, dry_run=False, max_concurrent_override: int | None = None):
     """Run complete Client Suspecting AI analysis pipeline"""
     print(f"🤖 Running Client Suspecting AI Analysis Pipeline")
     print(f"   Departments: {departments}")
@@ -1963,8 +1962,16 @@ def run_client_suspecting_ai_analysis(departments, model, format_type, with_uplo
                     print(f"⚠️  No conversations found for {department}")
                     continue
                 
-                # Step 4: Process through LLM
-                results, processor = asyncio.run(run_llm_processing(conversations, prompt_text, model))
+                # Step 4: Process through LLM (honor override if provided)
+                if max_concurrent_override is not None:
+                    print(f"🔧 Using concurrency limit override: {max_concurrent_override}")
+                    results, processor = asyncio.run(
+                        run_llm_processing(conversations, prompt_text, model, max_concurrent_override)
+                    )
+                else:
+                    results, processor = asyncio.run(
+                        run_llm_processing(conversations, prompt_text, model)
+                    )
                 
                 # Step 5: Save outputs
                 save_llm_outputs(results, department, "client_suspecting_ai")
@@ -2948,6 +2955,8 @@ def main():
                        help='Show what would run without executing')
     parser.add_argument('--date', default=None,
                        help='Target date for analysis in YYYY-MM-DD format (defaults to yesterday)')
+    parser.add_argument('--max-concurrent', type=int, default=None,
+                       help='Override maximum concurrent LLM requests (default varies by prompt)')
     
     args = parser.parse_args()
     
@@ -3000,7 +3009,7 @@ def main():
     if args.prompt == 'sentiment_analysis':
         success = run_sentiment_analysis(
             args.departments, args.model, args.format, 
-            args.with_upload, args.dry_run, target_date
+            args.with_upload, args.dry_run, target_date, args.max_concurrent
         )
     elif args.prompt == 'rule_breaking':
         success = run_rule_breaking(
@@ -3010,7 +3019,7 @@ def main():
     elif args.prompt == 'ftr':
         success = run_ftr_analysis(
             args.departments, args.model, args.format,
-            args.with_upload, args.dry_run
+            args.with_upload, args.dry_run, args.max_concurrent
         )
     elif args.prompt == 'false_promises':
         success = run_false_promises_analysis(
@@ -3030,7 +3039,7 @@ def main():
     elif args.prompt == 'client_suspecting_ai':
         success = run_client_suspecting_ai_analysis(
             args.departments, args.model, args.format,
-            args.with_upload, args.dry_run
+            args.with_upload, args.dry_run, args.max_concurrent
         )
     elif args.prompt == 'clarity_score':
         success = run_clarity_score_analysis(

@@ -30,6 +30,7 @@ echo "  tool_calling       Run tool-calling evaluation (gemini-2.5-pro, xml)"
     echo "  --model MODEL         Model to use (default: gpt-4o for SA/FTR/categorizing, o4-mini for RB, gemini-2.5-pro for false_promises/policy_escalation/client_suspecting_ai/clarity_score/legal_alignment/call_request/threatening, gemini-2.5-flash for misprescription/unnecessary_clinic_rec)"
     echo "  --format FORMAT       Data format (segmented, json, xml, xml3d, transparent)"
     echo "  --with-upload         Include post-processing and upload (generates summary reports)"
+    echo "  --max-concurrent N    Override maximum concurrent LLM requests"
     echo "  --dry-run            Show what would run without executing"
     echo ""
     echo "Examples:"
@@ -55,6 +56,7 @@ DEPARTMENTS="all"
 MODEL=""
 FORMAT=""
 WITH_UPLOAD=false
+MAX_CONCURRENT=""
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
@@ -64,6 +66,7 @@ while [[ $# -gt 0 ]]; do
         --model) MODEL="$2"; shift 2 ;;
         --format) FORMAT="$2"; shift 2 ;;
         --with-upload) WITH_UPLOAD=true; shift ;;
+        --max-concurrent) MAX_CONCURRENT="$2"; shift 2 ;;
         --dry-run) DRY_RUN=true; shift ;;
         --help) show_help; exit 0 ;;
         *) echo "❌ Unknown option: $1"; show_help; exit 1 ;;
@@ -97,6 +100,7 @@ esac
 CMD="python3 scripts/run_pipeline.py --prompt $PROMPT --departments \"$DEPARTMENTS\" --format $FORMAT --model $MODEL"
 [[ "$WITH_UPLOAD" == true ]] && CMD="$CMD --with-upload"
 [[ "$DRY_RUN" == true ]] && CMD="$CMD --dry-run"
+[[ -n "$MAX_CONCURRENT" ]] && CMD="$CMD --max-concurrent $MAX_CONCURRENT"
 
 echo "📋 Running: $COMMAND with $MODEL on $DEPARTMENTS"
 echo "🚀 Executing: $CMD"
