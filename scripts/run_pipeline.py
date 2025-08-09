@@ -1220,8 +1220,10 @@ def run_sentiment_analysis(departments, model, format_type, with_upload=False, d
                     print(f"⚠️  No conversations found for {department}")
                     continue
                 
-                # Step 4: Process through LLM
-                results, processor = asyncio.run(run_llm_processing(conversations, prompt_text, model))
+                # Step 4: Process through LLM with reduced concurrency for stability
+                max_concurrent = 10
+                print(f"🔧 Using concurrency limit: {max_concurrent} for client_suspecting_ai")
+                results, processor = asyncio.run(run_llm_processing(conversations, prompt_text, model, max_concurrent))
                 
                 # Step 5: Save outputs
                 save_llm_outputs(results, department, "sentiment_analysis", target_date)
