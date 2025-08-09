@@ -32,6 +32,7 @@ echo "  tool_calling       Run tool-calling evaluation (gemini-2.5-pro, xml)"
     echo "  --with-upload         Include post-processing and upload (generates summary reports)"
     echo "  --max-concurrent N    Override maximum concurrent LLM requests"
     echo "  --dry-run            Show what would run without executing"
+    echo "  --date YYYY-MM-DD    Target date to process (defaults to yesterday)"
     echo ""
     echo "Examples:"
 echo "  $0 sa --with-upload                      # Full SA pipeline"  
@@ -58,6 +59,7 @@ FORMAT=""
 WITH_UPLOAD=false
 MAX_CONCURRENT=""
 DRY_RUN=false
+DATE_ARG=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -68,6 +70,7 @@ while [[ $# -gt 0 ]]; do
         --with-upload) WITH_UPLOAD=true; shift ;;
         --max-concurrent) MAX_CONCURRENT="$2"; shift 2 ;;
         --dry-run) DRY_RUN=true; shift ;;
+        --date) DATE_ARG="$2"; shift 2 ;;
         --help) show_help; exit 0 ;;
         *) echo "❌ Unknown option: $1"; show_help; exit 1 ;;
     esac
@@ -101,6 +104,7 @@ CMD="python3 scripts/run_pipeline.py --prompt $PROMPT --departments \"$DEPARTMEN
 [[ "$WITH_UPLOAD" == true ]] && CMD="$CMD --with-upload"
 [[ "$DRY_RUN" == true ]] && CMD="$CMD --dry-run"
 [[ -n "$MAX_CONCURRENT" ]] && CMD="$CMD --max-concurrent $MAX_CONCURRENT"
+[[ -n "$DATE_ARG" ]] && CMD="$CMD --date $DATE_ARG"
 
 echo "📋 Running: $COMMAND with $MODEL on $DEPARTMENTS"
 echo "🚀 Executing: $CMD"

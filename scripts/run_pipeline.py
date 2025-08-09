@@ -1915,7 +1915,7 @@ def run_policy_escalation_analysis(departments, model, format_type, with_upload=
         print(f"❌ Policy Escalation Pipeline failed: {str(e)}")
         return False
 
-def run_client_suspecting_ai_analysis(departments, model, format_type, with_upload=False, dry_run=False, max_concurrent_override: int | None = None):
+def run_client_suspecting_ai_analysis(departments, model, format_type, with_upload=False, dry_run=False, max_concurrent_override: int | None = None, target_date=None):
     """Run complete Client Suspecting AI analysis pipeline"""
     print(f"🤖 Running Client Suspecting AI Analysis Pipeline")
     print(f"   Departments: {departments}")
@@ -1945,15 +1945,15 @@ def run_client_suspecting_ai_analysis(departments, model, format_type, with_uplo
             
             try:
                 # Check if LLM outputs already exist (caching)
-                if check_llm_output_exists(department, "client_suspecting_ai"):
+                if check_llm_output_exists(department, "client_suspecting_ai", target_date):
                     print(f"⚡ Skipping LLM processing for {department} - using cached results")
                     continue
                 
                 # Step 1: Download from Tableau
-                raw_file = download_tableau_data(department)
+                raw_file = download_tableau_data(department, target_date=target_date)
                 
                 # Step 2: Preprocess data
-                processed_file = preprocess_data(raw_file, department, format_type)
+                processed_file = preprocess_data(raw_file, department, format_type, target_date=target_date)
                 
                 # Step 3: Load preprocessed data
                 conversations = load_preprocessed_data(processed_file, format_type)
@@ -1974,7 +1974,7 @@ def run_client_suspecting_ai_analysis(departments, model, format_type, with_uplo
                     )
                 
                 # Step 5: Save outputs
-                save_llm_outputs(results, department, "client_suspecting_ai")
+                save_llm_outputs(results, department, "client_suspecting_ai", target_date)
                 
                 # Display token usage
                 print(processor.get_token_summary(department))
@@ -1990,12 +1990,12 @@ def run_client_suspecting_ai_analysis(departments, model, format_type, with_uplo
             try:
                 from post_processors.client_suspecting_ai_postprocessing import ClientSuspectingAiProcessor
                 processor = ClientSuspectingAiProcessor()
-                processor.process_all_files()
+                processor.process_all_files(target_date)
                 
                 print(f"\n📤 Uploading client suspecting AI results to Google Sheets...")
                 from post_processors.upload_client_suspecting_ai_sheets import ClientSuspectingAiUploader
                 uploader = ClientSuspectingAiUploader()
-                uploader.process_all_files()
+                uploader.process_all_files(target_date)
                 
             except Exception as e:
                 print(f"❌ Error during post-processing/upload: {str(e)}")
@@ -2091,7 +2091,7 @@ def run_clarity_score_analysis(departments, model, format_type, with_upload=Fals
         print(f"❌ Clarity Score Pipeline failed: {str(e)}")
         return False
 
-def run_legal_alignment_analysis(departments, model, format_type, with_upload=False, dry_run=False):
+def run_legal_alignment_analysis(departments, model, format_type, with_upload=False, dry_run=False, target_date=None):
     """Run complete Legal Alignment analysis pipeline"""
     print(f"⚖️ Running Legal Alignment Analysis Pipeline")
     print(f"   Departments: {departments}")
@@ -2121,15 +2121,15 @@ def run_legal_alignment_analysis(departments, model, format_type, with_upload=Fa
             
             try:
                 # Check if LLM outputs already exist (caching)
-                if check_llm_output_exists(department, "legal_alignment"):
+                if check_llm_output_exists(department, "legal_alignment", target_date):
                     print(f"⚡ Skipping LLM processing for {department} - using cached results")
                     continue
                 
                 # Step 1: Download from Tableau
-                raw_file = download_tableau_data(department)
+                raw_file = download_tableau_data(department, target_date=target_date)
                 
                 # Step 2: Preprocess data
-                processed_file = preprocess_data(raw_file, department, format_type)
+                processed_file = preprocess_data(raw_file, department, format_type, target_date=target_date)
                 
                 # Step 3: Load preprocessed data
                 conversations = load_preprocessed_data(processed_file, format_type)
@@ -2142,7 +2142,7 @@ def run_legal_alignment_analysis(departments, model, format_type, with_upload=Fa
                 results, processor = asyncio.run(run_llm_processing(conversations, prompt_text, model))
                 
                 # Step 5: Save outputs
-                save_llm_outputs(results, department, "legal_alignment")
+                save_llm_outputs(results, department, "legal_alignment", target_date)
                 
                 # Display token usage
                 print(processor.get_token_summary(department))
@@ -2158,7 +2158,7 @@ def run_legal_alignment_analysis(departments, model, format_type, with_upload=Fa
             try:
                 from post_processors.legal_alignment_postprocessing import LegalAlignmentProcessor
                 processor = LegalAlignmentProcessor()
-                processor.process_all_files()
+                processor.process_all_files(target_date)
                 
                 print(f"\n📤 Uploading legal alignment results to Google Sheets...")
                 from post_processors.upload_legal_alignment_sheets import LegalAlignmentUploader
@@ -2610,6 +2610,78 @@ def run_threatening_analysis(departments, model, format_type, with_upload=False,
         print("🔍 DRY RUN - Would execute full Threatening pipeline")
         return True
 
+    try:
+        # Get prompt
+        prompt_registry = PromptRegistry()
+        threatening_prompt = prompt_registry.get_prompt("threatening")
+        prompt_text = threatening_prompt.get_prompt_text()
+        
+        # Determine departments to process
+        if departments == "all":
+            dept_list = list(DEPARTMENTS.keys())
+        else:
+            dept_list = [d.strip() for d in departments.split(',')]
+        
+        print(f"🎯 Processing departments: {dept_list}")
+        
+        for department in dept_list:
+            print(f"\n🏢 Processing {department}...")
+            
+            try:
+                # Check if LLM outputs already exist (caching)
+                if check_llm_output_exists(department, "threatening"):
+                    print(f"⚡ Skipping LLM processing for {department} - using cached results")
+                    continue
+                
+                # Step 1: Download from Tableau
+                raw_file = download_tableau_data(department)
+                
+                # Step 2: Preprocess data
+                processed_file = preprocess_data(raw_file, department, format_type)
+                
+                # Step 3: Load preprocessed data
+                conversations = load_preprocessed_data(processed_file, format_type)
+                
+                if not conversations:
+                    print(f"⚠️  No conversations found for {department}")
+                    continue
+                
+                # Step 4: Process through LLM
+                results, processor = asyncio.run(run_llm_processing(conversations, prompt_text, model))
+                
+                # Step 5: Save outputs
+                save_llm_outputs(results, department, "threatening")
+                
+                # Display token usage
+                print(processor.get_token_summary(department))
+                print(f"✅ Completed {department}")
+                
+            except Exception as e:
+                print(f"❌ Failed processing {department}: {str(e)}")
+                continue
+        
+        # Post-processing and upload
+        if with_upload:
+            print(f"\n📊 Starting Threatening post-processing...")
+            try:
+                from post_processors.threatening_postprocessing import ThreateningProcessor
+                processor = ThreateningProcessor()
+                processor.process_all_files()
+                
+                print(f"\n📤 Uploading threatening results to Google Sheets...")
+                from post_processors.upload_threatening_sheets import ThreateningUploader
+                uploader = ThreateningUploader()
+                uploader.process_all_files()
+                
+            except Exception as e:
+                print(f"❌ Error during post-processing/upload: {str(e)}")
+        
+        print("🎉 Threatening Analysis pipeline completed successfully!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Threatening Pipeline failed: {str(e)}")
+        return False
 def run_tool_calling_analysis(departments, model, format_type, with_upload=False, dry_run=False, target_date=None):
     """Run Tool Calling (Ghonaim) evaluation pipeline"""
     print(f"🛠️  Running Tool Calling Analysis Pipeline")
@@ -3039,7 +3111,7 @@ def main():
     elif args.prompt == 'client_suspecting_ai':
         success = run_client_suspecting_ai_analysis(
             args.departments, args.model, args.format,
-            args.with_upload, args.dry_run, args.max_concurrent
+            args.with_upload, args.dry_run, args.max_concurrent, target_date
         )
     elif args.prompt == 'clarity_score':
         success = run_clarity_score_analysis(
@@ -3049,7 +3121,7 @@ def main():
     elif args.prompt == 'legal_alignment':
         success = run_legal_alignment_analysis(
             args.departments, args.model, args.format,
-            args.with_upload, args.dry_run
+            args.with_upload, args.dry_run, target_date
         )
     elif args.prompt == 'call_request':
         success = run_call_request_analysis(

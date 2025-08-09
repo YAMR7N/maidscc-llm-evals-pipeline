@@ -17,9 +17,8 @@ class ClientSuspectingAiProcessor:
         self.service = None
         self.setup_sheets_api()
         
-        # Get yesterday's date for output directory
-        yesterday = datetime.now() - timedelta(days=1)
-        date_folder = yesterday.strftime('%Y-%m-%d')
+        # Default output directory (can be overridden per target_date in process call)
+        date_folder = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         self.client_suspecting_ai_dir = f"outputs/client_suspecting_ai/{date_folder}"
         os.makedirs(self.client_suspecting_ai_dir, exist_ok=True)
         
@@ -55,10 +54,11 @@ class ClientSuspectingAiProcessor:
             print(f"❌ Error setting up Google Sheets API: {str(e)}")
             return False
 
-    def find_client_suspecting_ai_files(self):
-        """Find all client_suspecting_ai files from yesterday's date"""
-        yesterday = datetime.now() - timedelta(days=1)
-        date_folder = yesterday.strftime('%Y-%m-%d')
+    def find_client_suspecting_ai_files(self, target_date: datetime | None = None):
+        """Find all client_suspecting_ai files for target_date (defaults to yesterday)"""
+        if target_date is None:
+            target_date = datetime.now() - timedelta(days=1)
+        date_folder = target_date.strftime('%Y-%m-%d')
         output_dir = f"outputs/LLM_outputs/{date_folder}"
         
         client_suspecting_ai_files = []
@@ -67,12 +67,12 @@ class ClientSuspectingAiProcessor:
             print(f"❌ Directory not found: {output_dir}")
             return []
         
-        # Get yesterday's date in mm_dd format
-        target_date = yesterday.strftime('%m_%d')
+        # Date in mm_dd format
+        mm_dd = target_date.strftime('%m_%d')
         
         for filename in os.listdir(output_dir):
             if filename.startswith('client_suspecting_ai_') and filename.endswith('.csv'):
-                if target_date in filename:
+                if mm_dd in filename:
                     # Extract department from filename
                     name_part = filename[21:-4]  # Remove 'client_suspecting_ai_' and '.csv'
                     parts = name_part.split('_')
@@ -81,7 +81,7 @@ class ClientSuspectingAiProcessor:
                         dept_key = '_'.join(dept_parts)
                         
                         filepath = os.path.join(output_dir, filename)
-                        client_suspecting_ai_files.append((filepath, dept_key, filename))
+                        client_suspecting_ai_files.append((filepath, dept_key, filename, target_date))
         
         return client_suspecting_ai_files
 
@@ -253,8 +253,8 @@ class ClientSuspectingAiProcessor:
             print(f"❌ Error updating cell: {str(e)}")
             return False
 
-    def update_snapshot_sheet(self, percentage, dept_key):
-        """Update the department snapshot sheet with Client Suspecting AI percentage"""
+    def update_snapshot_sheet(self, percentage, dept_key, target_date: datetime | None = None):
+        """Update the department snapshot sheet with Client Suspecting AI percentage for target_date"""
         dept_name = self.convert_dept_key_to_name(dept_key)
         print(f"\n📊 Updating {dept_name} snapshot sheet with Client Suspecting AI: {percentage:.1f}%")
         
@@ -265,13 +265,13 @@ class ClientSuspectingAiProcessor:
         
         dept_sheet_id = self.department_sheets[dept_key]
         
-        # Find yesterday's date in yyyy-mm-dd format
-        yesterday_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        # Determine date in yyyy-mm-dd format
+        date_str = (target_date or (datetime.now() - timedelta(days=1))).strftime('%Y-%m-%d')
         
         # Find the date row
-        date_row, sheet_name = self.find_date_row(dept_sheet_id, yesterday_date)
+        date_row, sheet_name = self.find_date_row(dept_sheet_id, date_str)
         if not date_row:
-            print(f"❌ Could not find date {yesterday_date} in snapshot sheet")
+            print(f"❌ Could not find date {date_str} in snapshot sheet")
             return False
         
         # Find Client Suspecting AI column
@@ -291,12 +291,12 @@ class ClientSuspectingAiProcessor:
         
         return success
 
-    def process_all_files(self):
-        """Process all client_suspecting_ai files and calculate overall percentage"""
+    def process_all_files(self, target_date: datetime | None = None):
+        """Process all client_suspecting_ai files and calculate overall percentage for target_date"""
         print(f"🚀 Starting Client Suspecting AI post-processing...")
         
-        # Find all client_suspecting_ai files
-        client_suspecting_ai_files = self.find_client_suspecting_ai_files()
+        # Find files for the provided date
+        client_suspecting_ai_files = self.find_client_suspecting_ai_files(target_date)
         
         if not client_suspecting_ai_files:
             print("❌ No client_suspecting_ai files found for yesterday's date")
@@ -307,7 +307,14 @@ class ClientSuspectingAiProcessor:
         # Process each department individually
         successful_departments = 0
         
-        for filepath, dept_key, filename in client_suspecting_ai_files:
+        # Ensure output summary dir is set for target_date
+        if target_date is None:
+            target_date = datetime.now() - timedelta(days=1)
+        date_folder = target_date.strftime('%Y-%m-%d')
+        self.client_suspecting_ai_dir = f"outputs/client_suspecting_ai/{date_folder}"
+        os.makedirs(self.client_suspecting_ai_dir, exist_ok=True)
+
+        for filepath, dept_key, filename, td in client_suspecting_ai_files:
             try:
                 print(f"\n📊 Processing {filename}...")
                 
@@ -333,7 +340,7 @@ class ClientSuspectingAiProcessor:
                     
                     # Update this department's snapshot sheet
                     if self.service:
-                        update_success = self.update_snapshot_sheet(file_percentage, dept_key)
+                        update_success = self.update_snapshot_sheet(file_percentage, dept_key, target_date)
                         if update_success:
                             successful_departments += 1
                         else:

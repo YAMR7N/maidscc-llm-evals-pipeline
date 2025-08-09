@@ -63,11 +63,12 @@ class ClientSuspectingAiUploader:
             print(f"❌ Error setting up Google Sheets API: {str(e)}")
             return False
 
-    def find_client_suspecting_ai_files(self):
-        """Find all client_suspecting_ai files from yesterday's date"""
-        # Look in yesterday's date subfolder
-        yesterday = datetime.now() - timedelta(days=1)
-        date_folder = yesterday.strftime('%Y-%m-%d')
+    def find_client_suspecting_ai_files(self, target_date: datetime | None = None):
+        """Find all client_suspecting_ai files for target_date (defaults to yesterday)"""
+        # Determine target date
+        if target_date is None:
+            target_date = datetime.now() - timedelta(days=1)
+        date_folder = target_date.strftime('%Y-%m-%d')
         output_dir = f"outputs/LLM_outputs/{date_folder}"
         client_suspecting_ai_files = []
         
@@ -75,15 +76,15 @@ class ClientSuspectingAiUploader:
             print(f"❌ Directory not found: {output_dir}")
             return []
         
-        # Get yesterday's date in mm_dd format
-        target_date = yesterday.strftime('%m_%d')
+        # Get date in mm_dd format for filename matching
+        mm_dd = target_date.strftime('%m_%d')
         
-        print(f"🔍 Looking for client_suspecting_ai files with date: {target_date}")
+        print(f"🔍 Looking for client_suspecting_ai files with date: {mm_dd}")
         
         for filename in os.listdir(output_dir):
             if filename.startswith('client_suspecting_ai_') and filename.endswith('.csv'):
-                # Check if this file matches yesterday's date pattern
-                if target_date in filename:
+                # Check if this file matches target date pattern
+                if mm_dd in filename:
                     # Extract department from filename: client_suspecting_ai_{dept}_{mm}_{dd}.csv
                     # Remove client_suspecting_ai_ prefix and .csv suffix
                     name_part = filename[21:-4]  # Remove 'client_suspecting_ai_' and '.csv'
@@ -96,21 +97,14 @@ class ClientSuspectingAiUploader:
                         dept_key = '_'.join(dept_parts)
                         
                         filepath = os.path.join(output_dir, filename)
-                        client_suspecting_ai_files.append((filepath, dept_key, filename, target_date))
+                        client_suspecting_ai_files.append((filepath, dept_key, filename, mm_dd, date_folder))
                         print(f"📁 Found: {filename} -> Department: {dept_key}")
         
         return client_suspecting_ai_files
 
-    def create_sheet_name(self, date_str):
-        """Create properly formatted sheet name: yyyy-mm-dd"""
-        try:
-            # Convert mm_dd to yyyy-mm-dd
-            month, day = date_str.split('_')
-            current_year = datetime.now().year
-            formatted_date = f"{current_year}-{month.zfill(2)}-{day.zfill(2)}"
-            return formatted_date
-        except:
-            return date_str
+    def create_sheet_name(self, target_date: datetime) -> str:
+        """Create properly formatted sheet name: yyyy-mm-dd from a datetime"""
+        return target_date.strftime('%Y-%m-%d')
 
     def create_new_sheet(self, spreadsheet_id, sheet_name):
         """Create a new sheet in the target spreadsheet"""
@@ -209,16 +203,16 @@ class ClientSuspectingAiUploader:
             print(f"❌ Error uploading to {sheet_name}: {str(e)}")
             return False
 
-    def process_all_files(self):
-        """Process all client_suspecting_ai files and upload to Google Sheets"""
+    def process_all_files(self, target_date: datetime | None = None):
+        """Process all client_suspecting_ai files and upload to Google Sheets for target_date"""
         if not self.service:
             print("❌ Google Sheets API not available")
             return
         
         print(f"🚀 Starting client_suspecting_ai data upload to Google Sheets...")
         
-        # Find all client_suspecting_ai files
-        client_suspecting_ai_files = self.find_client_suspecting_ai_files()
+        # Find all client_suspecting_ai files for the provided date
+        client_suspecting_ai_files = self.find_client_suspecting_ai_files(target_date)
         
         if not client_suspecting_ai_files:
             print("❌ No client_suspecting_ai files found for yesterday's date")
@@ -228,7 +222,12 @@ class ClientSuspectingAiUploader:
         
         success_count = 0
         
-        for filepath, dept_key, filename, date_str in client_suspecting_ai_files:
+        # Ensure we have a concrete date for naming
+        if target_date is None:
+            target_date = datetime.now() - timedelta(days=1)
+        sheet_name = self.create_sheet_name(target_date)
+
+        for filepath, dept_key, filename, mm_dd, date_folder in client_suspecting_ai_files:
             try:
                 # Get proper department name
                 dept_name = self.department_name_mapping.get(dept_key, dept_key.replace('_', ' ').title())
@@ -239,10 +238,6 @@ class ClientSuspectingAiUploader:
                     print(f"❌ No spreadsheet ID found for department: {dept_name}")
                     continue
                 
-
-                
-                # Create sheet name in yyyy-mm-dd format
-                sheet_name = self.create_sheet_name(date_str)
                 print(f"\n📊 Processing {filename} -> {dept_name} -> Sheet: {sheet_name}")
                 
                 # Create sheet if it doesn't exist

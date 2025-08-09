@@ -108,11 +108,12 @@ class LegalAlignmentUploader:
             print(f"❌ Error uploading data to {sheet_name}: {str(e)}")
             return False
     
-    def find_legal_alignment_files(self):
-        """Find all legal alignment LLM output files"""
+    def find_legal_alignment_files(self, target_date: datetime | None = None):
+        """Find all legal alignment LLM output files for target_date (defaults to yesterday)"""
         files = []
-        yesterday = datetime.now() - timedelta(days=1)
-        date_folder = yesterday.strftime('%Y-%m-%d')
+        if target_date is None:
+            target_date = datetime.now() - timedelta(days=1)
+        date_folder = target_date.strftime('%Y-%m-%d')
         llm_outputs_dir = f"outputs/LLM_outputs/{date_folder}"
         
         if not os.path.exists(llm_outputs_dir):
@@ -135,21 +136,22 @@ class LegalAlignmentUploader:
         
         return files
     
-    def process_all_files(self):
-        """Process and upload all legal alignment files"""
+    def process_all_files(self, target_date: datetime | None = None):
+        """Process and upload all legal alignment files for target_date"""
         try:
             if not self.service:
                 print("❌ Google Sheets API not available")
                 return
             
-            files = self.find_legal_alignment_files()
+            files = self.find_legal_alignment_files(target_date)
             
             if not files:
                 print("ℹ️ No legal alignment files found to upload")
                 return
             
-            yesterday = datetime.now() - timedelta(days=1)
-            sheet_name = yesterday.strftime('%Y-%m-%d')
+            if target_date is None:
+                target_date = datetime.now() - timedelta(days=1)
+            sheet_name = target_date.strftime('%Y-%m-%d')
             
             successful_uploads = 0
             

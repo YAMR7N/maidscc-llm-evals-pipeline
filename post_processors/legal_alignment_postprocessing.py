@@ -124,14 +124,14 @@ class LegalAlignmentProcessor:
             print(f"❌ Error calculating legal metrics: {str(e)}")
             return 0.0, 0.0
     
-    def save_summary_report(self, escalation_rate, legal_concerns_percentage, dept_name):
+    def save_summary_report(self, escalation_rate, legal_concerns_percentage, dept_name, target_date: datetime | None = None):
         """Save individual department legal alignment metrics summary"""
         try:
             summary_data = {
                 'Department': [dept_name],
                 'Escalation Rate (%)': [escalation_rate],
                 'Legal Concerns Percentage (%)': [legal_concerns_percentage],
-                'Date': [datetime.now().strftime('%Y-%m-%d')]
+                'Date': [(target_date or (datetime.now() - timedelta(days=1))).strftime('%Y-%m-%d')]
             }
             
             summary_df = pd.DataFrame(summary_data)
@@ -251,8 +251,8 @@ class LegalAlignmentProcessor:
             print(f"❌ Error updating cell {range_name}: {str(e)}")
             return False
     
-    def update_snapshot_sheet(self, escalation_rate, legal_concerns_percentage, dept_key):
-        """Update both legal alignment metrics in department snapshot sheet for yesterday's date"""
+    def update_snapshot_sheet(self, escalation_rate, legal_concerns_percentage, dept_key, target_date: datetime | None = None):
+        """Update both legal alignment metrics in department snapshot sheet for target_date"""
         try:
             if not self.service:
                 print("❌ Google Sheets API not available")
@@ -264,7 +264,7 @@ class LegalAlignmentProcessor:
                 return False
                 
             sheet_id = self.department_sheets[dept_key]
-            yesterday = datetime.now() - timedelta(days=1)
+            yesterday = target_date or (datetime.now() - timedelta(days=1))
             
             # Find the row for yesterday's date first
             date_row = self.find_date_row(yesterday, sheet_id)
@@ -305,11 +305,12 @@ class LegalAlignmentProcessor:
             print(f"❌ Error updating snapshot sheet: {str(e)}")
             return False
     
-    def find_legal_alignment_files(self):
-        """Find all legal alignment LLM output files"""
+    def find_legal_alignment_files(self, target_date: datetime | None = None):
+        """Find all legal alignment LLM output files for target_date"""
         files = []
-        yesterday = datetime.now() - timedelta(days=1)
-        date_folder = yesterday.strftime('%Y-%m-%d')
+        if target_date is None:
+            target_date = datetime.now() - timedelta(days=1)
+        date_folder = target_date.strftime('%Y-%m-%d')
         llm_outputs_dir = f"outputs/LLM_outputs/{date_folder}"
         
         if not os.path.exists(llm_outputs_dir):
@@ -332,10 +333,10 @@ class LegalAlignmentProcessor:
         
         return files
     
-    def process_all_files(self):
-        """Process all legal alignment files and update metrics"""
+    def process_all_files(self, target_date: datetime | None = None):
+        """Process all legal alignment files and update metrics for target_date"""
         try:
-            files = self.find_legal_alignment_files()
+            files = self.find_legal_alignment_files(target_date)
             
             if not files:
                 print("ℹ️ No legal alignment files found to process")
@@ -364,11 +365,11 @@ class LegalAlignmentProcessor:
                         dept_name = 'CC Resolvers'
                     
                     # Save individual summary
-                    self.save_summary_report(escalation_rate, legal_concerns_percentage, dept_name)
+                    self.save_summary_report(escalation_rate, legal_concerns_percentage, dept_name, target_date)
                     
                     # Update department snapshot sheet
                     if self.service and dept_key in self.department_sheets:
-                        update_success = self.update_snapshot_sheet(escalation_rate, legal_concerns_percentage, dept_key)
+                        update_success = self.update_snapshot_sheet(escalation_rate, legal_concerns_percentage, dept_key, target_date)
                         if update_success:
                             successful_files += 1
                             print(f"✅ {dept_name}: {escalation_rate:.2f}% escalation rate, {legal_concerns_percentage:.2f}% legal concerns (snapshot updated)")
